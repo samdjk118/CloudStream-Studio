@@ -1,0 +1,62 @@
+# .dockerignore
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log
+.npm
+
+# Python
+backend/__pycache__/
+backend/*.py[cod]
+backend/*$py.class
+backend/*.so
+backend/.Python
+backend/venv/
+backend/env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# 環境變數
+.env
+.env.local
+.env.production
+
+# Token (會在容器內產生)
+backend/tokens/*.pickle
+
+# 日誌
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+README_DOCKER.md
+
+# 測試
+backend/test_*.py
+frontend/src/**/*.test.ts
+frontend/src/**/*.test.tsx
+
+# 文件
+*.md
+docs/
+

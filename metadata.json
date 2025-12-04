@@ -1,0 +1,5 @@
+{
+  "name": "CloudStream Studio",
+  "description": "A professional video platform to manage, clip, and synthesize videos from your Google Cloud Storage bucket, enhanced with Gemini Veo AI generation.",
+  "requestFramePermissions": []
+}
