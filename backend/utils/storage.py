@@ -1,269 +1,408 @@
-# backend/utils/storage.py
-
 from google.cloud import storage
-from typing import BinaryIO, List, Dict, Optional
-import os
+from google.cloud.exceptions import NotFound, GoogleCloudError
+from typing import List, Optional, BinaryIO, Union
 import logging
-from utils.gcs_auth import get_gcs_auth
+import os
+from pathlib import Path
+from .gcs_auth import get_storage_client
 
 logger = logging.getLogger(__name__)
 
 
-class StorageManager:
-    def __init__(self, bucket_name: str):
-        """初始化 Storage Manager"""
+class GCSManager:
+    """Google Cloud Storage 管理器"""
+    
+    def __init__(self, bucket_name: str, project_id: str = None):
+        """
+        初始化 GCS 管理器
         
-        # 使用 GCSAuth 進行認證
-        logger.info("初始化 GCS 認證...")
-        
-        gcs_auth = get_gcs_auth(
-            client_secret_file='credentials/credentials.json',
-            token_file='tokens/token.pickle',
-            project_id=os.getenv('GCP_PROJECT_ID'),
-            auto_refresh_interval_minutes=30
-        )
-        
-        # 執行認證
-        gcs_auth.authenticate()
-        
-        # 啟動自動刷新
-        gcs_auth.start_auto_refresh()
-        
-        # 取得 Storage Client
-        self.client = gcs_auth.get_storage_client()
+        Args:
+            bucket_name: Bucket 名稱
+            project_id: 項目 ID (可選)
+        """
         self.bucket_name = bucket_name
+        self.project_id = project_id or os.getenv('GCP_PROJECT_ID')
+        self.client = get_storage_client(self.project_id)
         self.bucket = self.client.bucket(bucket_name)
         
-        # 驗證 bucket 是否存在
-        try:
-            if not self.bucket.exists():
-                raise ValueError(f"Bucket '{bucket_name}' 不存在或無權限存取")
-        except Exception as e:
-            raise ValueError(f"無法存取 Bucket '{bucket_name}': {e}")
-        
-        logger.info(f"✓ 已連接到 GCS Bucket: {bucket_name}")
+        logger.info(f"📦 GCS Manager 初始化: {bucket_name}")
     
-    def file_exists(self, file_path: str) -> bool:
-        """檢查檔案是否存在"""
-        try:
-            blob = self.bucket.blob(file_path)
-            return blob.exists()
-        except Exception as e:
-            logger.error(f"檢查檔案錯誤: {e}")
-            return False
-    
-    def get_blob(self, file_path: str):
-        """取得 blob 物件並確保有完整資訊"""
-        try:
-            blob = self.bucket.blob(file_path)
-            
-            if not blob.exists():
-                raise FileNotFoundError(f"檔案不存在: {file_path}")
-            
-            # 確保載入完整的 blob 資訊
-            if blob.size is None or blob.content_type is None:
-                logger.info(f"重新載入 blob 資訊...")
-                blob.reload()
-            
-            # 驗證必要資訊
-            if blob.size is None:
-                logger.warning(f"警告：無法取得檔案大小")
-                # 嘗試再次載入
-                try:
-                    blob.reload()
-                except Exception as e:
-                    logger.warning(f"重新載入失敗: {e}")
-            
-            return blob
-            
-        except FileNotFoundError:
-            raise
-        except Exception as e:
-            logger.error(f"取得 blob 錯誤: {e}", exc_info=True)
-            raise
-
-    def list_files(self, prefix: str = "") -> List[Dict]:
-        """列出所有檔案"""
-        try:
-            blobs = self.bucket.list_blobs(prefix=prefix)
-            files = []
-            
-            for blob in blobs:
-                if blob.name.endswith('/'):
-                    continue
-                
-                if not blob.size:
-                    blob.reload()
-                
-                file_info = {
-                    'name': blob.name,
-                    'size': blob.size or 0,
-                    'content_type': blob.content_type or 'application/octet-stream',
-                    'created': blob.time_created.isoformat() if blob.time_created else None,
-                    'updated': blob.updated.isoformat() if blob.updated else None
-                }
-                files.append(file_info)
-            
-            logger.info(f"列出 {len(files)} 個檔案")
-            return files
-        except Exception as e:
-            logger.error(f"列出檔案錯誤: {e}")
-            raise
-    
-    def upload_file(self, file_path: str, file_obj, content_type: str = None):
+    def list_files(self, prefix: str = None, max_results: int = None) -> List[dict]:
         """
-        上傳檔案
+        列出文件
         
         Args:
-            file_path: 目標路徑
-            file_obj: 檔案物件
-            content_type: MIME 類型
-        """
-        try:
-            blob = self.bucket.blob(file_path)
-            
-            if content_type:
-                blob.content_type = content_type
-            
-            blob.upload_from_file(file_obj)
-            logger.info(f"✓ 已上傳: {file_path}")
-        except Exception as e:
-            logger.error(f"上傳檔案錯誤: {e}", exc_info=True)
-            raise
-    
-    def upload_bytes(self, file_path: str, data: bytes, content_type: str = None):
-        """
-        上傳 bytes 資料（用於縮圖等）
-        
-        Args:
-            file_path: 目標路徑
-            data: bytes 資料
-            content_type: MIME 類型
-        """
-        try:
-            logger.info(f"上傳 bytes 資料: {file_path} ({len(data)} bytes)")
-            
-            blob = self.bucket.blob(file_path)
-            
-            # 設定 content type
-            if content_type:
-                blob.content_type = content_type
-            
-            # 上傳資料
-            blob.upload_from_string(data, content_type=content_type)
-            
-            logger.info(f"✓ 已上傳: {file_path} ({len(data)} bytes)")
-            
-        except Exception as e:
-            logger.error(f"上傳 bytes 錯誤: {e}", exc_info=True)
-            raise
-
-    def download_bytes(self, file_path: str, start: int = 0, end: Optional[int] = None) -> bytes:
-        """下載檔案的部分內容（支援 Range 請求）
-        
-        Args:
-            file_path: 檔案路徑
-            start: 開始位置（inclusive）
-            end: 結束位置（exclusive，即不包含 end）
+            prefix: 文件前綴過濾
+            max_results: 最大結果數
         
         Returns:
-            bytes: 下載的資料
+            List[dict]: 文件信息列表
         """
         try:
-            logger.info(f"下載請求: {file_path} [{start}, {end})")
+            blobs = self.bucket.list_blobs(prefix=prefix, max_results=max_results)
             
-            blob = self.bucket.blob(file_path)
+            files = []
+            for blob in blobs:
+                files.append({
+                    "name": blob.name,
+                    "size": blob.size,
+                    "content_type": blob.content_type,
+                    "created": blob.time_created.isoformat() if blob.time_created else None,
+                    "updated": blob.updated.isoformat() if blob.updated else None,
+                    "url": f"gs://{self.bucket_name}/{blob.name}",
+                    "public_url": blob.public_url if hasattr(blob, 'public_url') else None
+                })
             
-            # 檢查檔案是否存在
-            if not blob.exists():
-                logger.error(f"檔案不存在: {file_path}")
-                raise FileNotFoundError(f"檔案不存在: {file_path}")
+            logger.info(f"📋 列出 {len(files)} 個文件")
+            return files
             
-            logger.info(f"✓ 檔案存在")
-            
-            # 確保有檔案大小資訊
-            if blob.size is None:
-                logger.info(f"載入 blob 資訊...")
-                blob.reload()
-            
-            file_size = blob.size
-            
-            # 再次檢查
-            if file_size is None:
-                logger.error(f"無法取得檔案大小")
-                raise ValueError("Cannot determine file size")
-            
-            logger.info(f"檔案大小: {file_size / 1024 / 1024:.2f} MB")
-            
-            # 處理 end 參數
-            if end is None:
-                end = file_size
-            
-            # 確保 end 不超過檔案大小
-            end = min(end, file_size)
-            
-            # 驗證範圍
-            if start < 0:
-                logger.error(f"start 不能為負數: {start}")
-                raise ValueError(f"Invalid start position: {start}")
-            
-            if start >= file_size:
-                logger.error(f"start 超出檔案大小: {start} >= {file_size}")
-                raise ValueError(f"Start position out of range: {start} >= {file_size}")
-            
-            if start >= end:
-                logger.error(f"無效的範圍: [{start}, {end})")
-                raise ValueError(f"Invalid range: start={start}, end={end}")
-            
-            # 計算要下載的大小
-            chunk_size = end - start
-            logger.info(f"下載 {chunk_size / 1024:.2f} KB...")
-            
-            # 下載資料
-            # 注意：download_as_bytes 的 end 參數是 exclusive
-            data = blob.download_as_bytes(start=start, end=end)
-            
-            actual_size = len(data)
-            logger.info(f"✓ 下載完成: {actual_size} bytes")
-            
-            # 驗證下載的大小
-            if actual_size != chunk_size:
-                logger.warning(f"下載大小不符 (預期: {chunk_size}, 實際: {actual_size})")
-            
-            return data
-            
-        except FileNotFoundError:
-            raise
-        except ValueError:
-            raise
         except Exception as e:
-            logger.error(f"下載錯誤: {e}", exc_info=True)
+            logger.error(f"❌ 列出文件失敗: {e}")
             raise
     
-    def delete_file(self, file_path: str):
-        """刪除檔案"""
+    def upload_file(
+        self,
+        source: Union[BinaryIO, bytes, str],
+        destination_name: str,
+        content_type: str = None,
+        make_public: bool = False
+    ) -> dict:
+        """
+        上傳文件
+        
+        Args:
+            source: 文件來源 (文件對象、字節或文件路徑)
+            destination_name: 目標文件名
+            content_type: 內容類型
+            make_public: 是否設為公開
+        
+        Returns:
+            dict: 上傳結果
+        """
         try:
-            blob = self.bucket.blob(file_path)
+            blob = self.bucket.blob(destination_name)
+            
+            # 根據來源類型上傳
+            if isinstance(source, bytes):
+                blob.upload_from_string(source, content_type=content_type)
+            elif isinstance(source, str):
+                # 假設是文件路徑
+                blob.upload_from_filename(source, content_type=content_type)
+            else:
+                # 假設是文件對象
+                blob.upload_from_file(source, content_type=content_type)
+            
+            # 設為公開（如果需要）
+            if make_public:
+                blob.make_public()
+            
+            logger.info(f"✅ 上傳成功: {destination_name}")
+            
+            return {
+                "success": True,
+                "filename": destination_name,
+                "size": blob.size,
+                "content_type": blob.content_type,
+                "url": f"gs://{self.bucket_name}/{destination_name}",
+                "public_url": blob.public_url if make_public else None
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 上傳失敗: {e}")
+            raise
+    
+    def download_file(self, filename: str, destination: str = None) -> Optional[bytes]:
+        """
+        下載文件
+        
+        Args:
+            filename: 文件名
+            destination: 本地保存路徑 (可選)
+        
+        Returns:
+            bytes: 文件內容 (如果沒有指定 destination)
+            None: 如果指定了 destination
+        """
+        try:
+            blob = self.bucket.blob(filename)
             
             if not blob.exists():
-                raise FileNotFoundError(f"檔案不存在: {file_path}")
+                raise NotFound(f"文件不存在: {filename}")
+            
+            if destination:
+                # 保存到本地文件
+                blob.download_to_filename(destination)
+                logger.info(f"✅ 下載成功: {filename} -> {destination}")
+                return None
+            else:
+                # 返回字節內容
+                content = blob.download_as_bytes()
+                logger.info(f"✅ 下載成功: {filename} ({len(content)} bytes)")
+                return content
+                
+        except NotFound:
+            logger.error(f"❌ 文件不存在: {filename}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ 下載失敗: {e}")
+            raise
+    
+    def download_bytes(self, filename: str, start: int = None, end: int = None) -> bytes:
+        """
+        下載文件的字節範圍
+        
+        Args:
+            filename: 文件名
+            start: 起始字節位置 (可選)
+            end: 結束字節位置 (可選)
+        
+        Returns:
+            bytes: 文件內容
+        """
+        try:
+            blob = self.bucket.blob(filename)
+            
+            if not blob.exists():
+                raise NotFound(f"文件不存在: {filename}")
+            
+            if start is not None and end is not None:
+                # 下載指定範圍
+                logger.info(f"📥 下載範圍: {filename} [{start}-{end}]")
+                return blob.download_as_bytes(start=start, end=end)
+            else:
+                # 下載整個文件
+                logger.info(f"📥 下載完整文件: {filename}")
+                return blob.download_as_bytes()
+                
+        except NotFound:
+            logger.error(f"❌ 文件不存在: {filename}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ 下載失敗: {e}")
+            raise
+    
+    def upload_bytes(self, filename: str, data: bytes, content_type: str = None):
+        """
+        上傳字節數據
+        
+        Args:
+            filename: 目標文件名
+            data: 字節數據
+            content_type: 內容類型
+        """
+        try:
+            blob = self.bucket.blob(filename)
+            blob.upload_from_string(data, content_type=content_type)
+            logger.info(f"✅ 上傳成功: {filename} ({len(data)} bytes)")
+        except Exception as e:
+            logger.error(f"❌ 上傳失敗: {e}")
+            raise
+    
+    def get_blob(self, filename: str):
+        """
+        獲取 Blob 對象
+        
+        Args:
+            filename: 文件名
+        
+        Returns:
+            Blob: Google Cloud Storage Blob 對象
+        """
+        return self.bucket.blob(filename)
+    
+    def delete_file(self, filename: str) -> bool:
+        """
+        刪除文件
+        
+        Args:
+            filename: 文件名
+        
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            blob = self.bucket.blob(filename)
+            
+            if not blob.exists():
+                raise NotFound(f"文件不存在: {filename}")
             
             blob.delete()
-            logger.info(f"✓ 刪除成功: {file_path}")
+            logger.info(f"🗑️  刪除成功: {filename}")
+            return True
+            
+        except NotFound:
+            logger.error(f"❌ 文件不存在: {filename}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ 刪除失敗: {e}")
+            raise
+    
+    def file_exists(self, filename: str) -> bool:
+        """
+        檢查文件是否存在
+        
+        Args:
+            filename: 文件名
+        
+        Returns:
+            bool: 是否存在
+        """
+        try:
+            blob = self.bucket.blob(filename)
+            return blob.exists()
+        except Exception as e:
+            logger.error(f"❌ 檢查文件失敗: {e}")
+            return False
+    
+    def get_file_info(self, filename: str) -> dict:
+        """
+        獲取文件信息
+        
+        Args:
+            filename: 文件名
+        
+        Returns:
+            dict: 文件信息
+        """
+        try:
+            blob = self.bucket.blob(filename)
+            
+            if not blob.exists():
+                raise NotFound(f"文件不存在: {filename}")
+            
+            blob.reload()
+            
+            return {
+                "name": blob.name,
+                "size": blob.size,
+                "content_type": blob.content_type,
+                "created": blob.time_created.isoformat() if blob.time_created else None,
+                "updated": blob.updated.isoformat() if blob.updated else None,
+                "md5_hash": blob.md5_hash,
+                "url": f"gs://{self.bucket_name}/{blob.name}",
+                "public_url": blob.public_url if hasattr(blob, 'public_url') else None
+            }
+            
+        except NotFound:
+            logger.error(f"❌ 文件不存在: {filename}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ 獲取文件信息失敗: {e}")
+            raise
+    
+    def copy_file(self, source_name: str, destination_name: str) -> dict:
+        """
+        複製文件
+        
+        Args:
+            source_name: 源文件名
+            destination_name: 目標文件名
+        
+        Returns:
+            dict: 複製結果
+        """
+        try:
+            source_blob = self.bucket.blob(source_name)
+            
+            if not source_blob.exists():
+                raise NotFound(f"源文件不存在: {source_name}")
+            
+            # 複製到同一個 bucket
+            destination_blob = self.bucket.copy_blob(
+                source_blob,
+                self.bucket,
+                destination_name
+            )
+            
+            logger.info(f"✅ 複製成功: {source_name} -> {destination_name}")
+            
+            return {
+                "success": True,
+                "source": source_name,
+                "destination": destination_name,
+                "size": destination_blob.size
+            }
+            
+        except NotFound:
+            logger.error(f"❌ 源文件不存在: {source_name}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ 複製失敗: {e}")
+            raise
+    
+    def move_file(self, source_name: str, destination_name: str) -> dict:
+        """
+        移動文件（複製後刪除源文件）
+        
+        Args:
+            source_name: 源文件名
+            destination_name: 目標文件名
+        
+        Returns:
+            dict: 移動結果
+        """
+        try:
+            # 先複製
+            result = self.copy_file(source_name, destination_name)
+            
+            # 再刪除源文件
+            self.delete_file(source_name)
+            
+            logger.info(f"✅ 移動成功: {source_name} -> {destination_name}")
+            return result
             
         except Exception as e:
-            logger.error(f"刪除錯誤: {e}")
+            logger.error(f"❌ 移動失敗: {e}")
+            raise
+    
+    def get_signed_url(
+        self,
+        filename: str,
+        expiration: int = 3600,
+        method: str = 'GET'
+    ) -> str:
+        """
+        生成簽名 URL
+        
+        Args:
+            filename: 文件名
+            expiration: 過期時間（秒）
+            method: HTTP 方法
+        
+        Returns:
+            str: 簽名 URL
+        """
+        try:
+            blob = self.bucket.blob(filename)
+            
+            from datetime import timedelta
+            url = blob.generate_signed_url(
+                expiration=timedelta(seconds=expiration),
+                method=method
+            )
+            
+            logger.info(f"✅ 生成簽名 URL: {filename}")
+            return url
+            
+        except Exception as e:
+            logger.error(f"❌ 生成簽名 URL 失敗: {e}")
             raise
 
 
-_storage_manager = None
-
-
-def get_storage_manager(bucket_name: str) -> StorageManager:
-    """取得 Storage Manager 實例（單例）"""
-    global _storage_manager
+# 便捷函數
+def create_gcs_manager(bucket_name: str = None, project_id: str = None) -> GCSManager:
+    """
+    創建 GCS 管理器
     
-    if _storage_manager is None:
-        _storage_manager = StorageManager(bucket_name)
+    Args:
+        bucket_name: Bucket 名稱（從環境變量讀取如果未提供）
+        project_id: 項目 ID（從環境變量讀取如果未提供）
     
-    return _storage_manager
+    Returns:
+        GCSManager: GCS 管理器實例
+    """
+    bucket = bucket_name or os.getenv('GCS_BUCKET_NAME')
+    if not bucket:
+        raise ValueError("必須提供 bucket_name 或設置 GCS_BUCKET_NAME 環境變量")
+    
+    return GCSManager(bucket, project_id)

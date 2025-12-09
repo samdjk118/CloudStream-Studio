@@ -1,4 +1,4 @@
 # 空檔案或匯出常用工具
-from .storage import StorageManager
+from .storage import GCSManager
 
-__all__ = ['StorageManager']
+__all__ = ['GCSManager']

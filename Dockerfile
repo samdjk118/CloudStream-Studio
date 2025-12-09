@@ -27,16 +27,28 @@ FROM python:3.11-slim
 # 設定環境變數
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
-    APP_HOME=/app
+    APP_HOME=/app \
+    GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/application_default_credentials.json
 
 WORKDIR $APP_HOME
 
-# 安裝系統依賴
+# 安裝系統依賴（修正 gcloud CLI 安裝方式）
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     nginx \
     supervisor \
     curl \
+    gnupg \
+    lsb-release \
+    apt-transport-https \
+    ca-certificates \
+    && mkdir -p /usr/share/keyrings \
+    && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+       | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+       | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list \
+    && apt-get update \
+    && apt-get install -y google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # 複製並安裝 Python 依賴
@@ -67,4 +79,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # 啟動
 CMD ["./startup.sh"]
-

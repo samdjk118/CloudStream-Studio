@@ -17,11 +17,14 @@ source venv/bin/activate
 echo "安裝依賴套件..."
 pip install -r requirements.txt
 
-# 檢查認證
-if [ ! -f "token.pickle" ]; then
+echo "🔍 檢查認證..."
+python3 check_auth.py
+
+if [ $? -ne 0 ]; then
     echo ""
-    echo "首次執行，需要進行 OAuth 認證..."
-    python ./utils/gcs_auth.py
+    echo "❌ 認證檢查失敗"
+    echo "   請先運行: ./setup-local.sh"
+    exit 1
 fi
 
 # 啟動服務

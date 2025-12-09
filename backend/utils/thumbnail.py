@@ -1,4 +1,4 @@
-# backend/utils/thumbnail.py
+# backend/utils/video_thumbnail.py
 
 import os
 import tempfile
@@ -43,7 +43,7 @@ class ThumbnailGenerator:
         # 檢查快取
         if not force_regenerate and self.storage.file_exists(thumbnail_path):
             logger.info(f"✓ 使用快取縮圖: {thumbnail_path}")
-            thumbnail_data = self.storage.download_bytes(thumbnail_path)
+            thumbnail_data = self.storage.download_file(thumbnail_path)
             return thumbnail_data, False
         
         # 產生新縮圖
@@ -76,16 +76,20 @@ class ThumbnailGenerator:
             # 1. 下載影片到臨時檔案
             logger.info(f"📥 下載影片: {video_path}")
             
-            # 取得檔案大小
-            blob = self.storage.get_blob(video_path)
-            if blob.size is None:
-                blob.reload()
+            # 獲取文件信息
+            try:
+                file_info = self.storage.get_file_info(video_path)
+                file_size = file_info['size']
+                logger.info(f"   檔案大小: {file_size / 1024 / 1024:.2f} MB")
+            except Exception as e:
+                logger.error(f"❌ 獲取文件信息失敗: {e}")
+                raise Exception(f"無法獲取視頻文件信息: {video_path}")
             
-            file_size = blob.size
-            logger.info(f"   檔案大小: {file_size / 1024 / 1024:.2f} MB")
+            # 下載完整影片
+            video_data = self.storage.download_file(video_path)
             
-            # 完整下載影片
-            video_data = self.storage.download_bytes(video_path, 0, file_size)
+            if not video_data:
+                raise Exception(f"下載的視頻數據為空: {video_path}")
             
             # 寫入臨時檔案
             with open(video_temp_path, 'wb') as f:
@@ -95,8 +99,8 @@ class ThumbnailGenerator:
             logger.info(f"   已寫入: {actual_size} bytes")
             
             # 驗證檔案
-            if actual_size != file_size:
-                raise Exception(f"檔案大小不符: 預期 {file_size}, 實際 {actual_size}")
+            if actual_size == 0:
+                raise Exception("下載的視頻文件為空")
             
             # 2. 使用 ffmpeg 擷取縮圖
             logger.info(f"🎬 使用 ffmpeg 擷取縮圖 (時間: {time_offset}s, 尺寸: {width}x{height})")
@@ -118,7 +122,7 @@ class ThumbnailGenerator:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=60  # 增加超時時間
             )
             
             if result.returncode != 0:
@@ -132,6 +136,10 @@ class ThumbnailGenerator:
                 raise Exception("縮圖檔案未產生")
             
             thumb_size = os.path.getsize(thumb_temp_path)
+            
+            if thumb_size == 0:
+                raise Exception("生成的縮圖文件為空")
+            
             logger.info(f"✓ 縮圖產生成功: {thumb_size} bytes")
             
             with open(thumb_temp_path, 'rb') as f:
@@ -167,19 +175,14 @@ class ThumbnailGenerator:
     
     def delete_all_thumbnails_for_video(self, video_path: str):
         """刪除影片的所有縮圖"""
-        # 列出所有縮圖
         try:
-            blobs = self.storage.bucket.list_blobs(prefix=self.thumbnail_prefix)
+            thumbnails = self.storage.list_files(prefix=self.thumbnail_prefix)
             deleted_count = 0
             
-            # 由於使用 hash 命名，我們需要檢查每個縮圖
-            # 這裡提供一個簡化版本
             logger.warning(f"⚠️  使用 hash 命名，無法直接找到所有相關縮圖")
             logger.info(f"   建議: 在資料庫中維護縮圖索引")
             
-            # 如果要完整實作，需要:
-            # 1. 在產生縮圖時記錄 video_path -> thumbnail_path 的映射
-            # 2. 在刪除時查詢這個映射
+            return deleted_count
             
         except Exception as e:
             logger.error(f"❌ 刪除縮圖失敗: {e}")

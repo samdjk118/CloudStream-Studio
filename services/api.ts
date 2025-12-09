@@ -1,111 +1,63 @@
-// services/api.ts
+// src/services/api.ts
 
 // API_BASE
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-// 定義後端回傳的檔案格式
+console.log('🔧 API Base URL:', API_BASE);
+
+// ==================== 類型定義 ====================
+
 export interface GCSFile {
   name: string;
   size: number;
   content_type: string;
   created: string | null;
   updated: string | null;
+  url: string;
+  public_url: string | null;
+}
+
+export interface FilesResponse {
+  success: boolean;
+  files: GCSFile[];
+  count: number;
+  total_files?: number;
 }
 
 // 縮圖選項
 export interface ThumbnailOptions {
   width?: number;
   height?: number;
-  time?: number;
-  regenerate?: boolean;
+  time_offset?: number;  // 改為 time_offset 匹配後端
+  force_regenerate?: boolean;
 }
 
-// 修正：正確編碼 URL
-export const getStreamUrl = (filename: string) => {
-  const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
-  return `${API_BASE}/api/stream/${encodedPath}`;
-};
+// ==================== 文件管理 API ====================
 
-// 新增：取得縮圖 URL
-export const getThumbnailUrl = (
-  filename: string,
-  options: ThumbnailOptions = {}
-): string => {
-  const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
-  const params = new URLSearchParams();
-  
-  if (options.width) params.append('width', options.width.toString());
-  if (options.height) params.append('height', options.height.toString());
-  if (options.time !== undefined) params.append('time', options.time.toString());
-  if (options.regenerate) params.append('regenerate', 'true');
-  
-  const queryString = params.toString();
-  return `${API_BASE}/api/thumbnail/${encodedPath}${queryString ? '?' + queryString : ''}`;
-};
-
-// 新增：取得縮圖（返回 Blob URL）
-export const fetchThumbnail = async (
-  filename: string,
-  options: ThumbnailOptions = {}
-): Promise<string> => {
-  try {
-    const url = getThumbnailUrl(filename, options);
-    const response = await fetch(url);
-    
-    if (!response.ok) {
-      throw new Error(`Failed to fetch thumbnail: ${response.statusText}`);
-    }
-    
-    const blob = await response.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    
-    // 記錄來源（新產生 or 快取）
-    const source = response.headers.get('X-Thumbnail-Source');
-    console.log(`縮圖來源 (${filename}): ${source}`);
-    
-    return blobUrl;
-  } catch (error) {
-    console.error('取得縮圖失敗:', error);
-    throw error;
-  }
-};
-
-// 新增：刪除縮圖快取
-export const deleteThumbnail = async (
-  filename: string,
-  width?: number,
-  height?: number
-): Promise<void> => {
-  const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
-  const params = new URLSearchParams();
-  
-  if (width) params.append('width', width.toString());
-  if (height) params.append('height', height.toString());
-  
-  const queryString = params.toString();
-  const url = `${API_BASE}/api/thumbnail/${encodedPath}${queryString ? '?' + queryString : ''}`;
-  
-  const response = await fetch(url, { method: 'DELETE' });
-  
-  if (!response.ok) {
-    throw new Error('Failed to delete thumbnail');
-  }
-};
-
-// 修正：返回完整的檔案物件
+/**
+ * 獲取文件列表
+ */
 export const fetchFiles = async (): Promise<GCSFile[]> => {
   try {
     const res = await fetch(`${API_BASE}/api/files`);
-    if (!res.ok) throw new Error('Failed to fetch files');
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    }
     
-    const data = await res.json();
-    return Array.isArray(data) ? data : [];
+    const data: FilesResponse = await res.json();
+    console.log('📋 API Response:', data);
+    
+    // 後端返回 { success, files, count }
+    return data.files || [];
   } catch (error) {
-    console.error("API Error fetching files:", error);
+    console.error("❌ API Error fetching files:", error);
     return [];
   }
 };
 
+/**
+ * 上傳文件
+ */
 export const uploadFile = async (file: File): Promise<void> => {
   const formData = new FormData();
   formData.append('file', file);
@@ -121,6 +73,9 @@ export const uploadFile = async (file: File): Promise<void> => {
   }
 };
 
+/**
+ * 刪除文件
+ */
 export const deleteFile = async (filename: string): Promise<void> => {
   const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
   const res = await fetch(`${API_BASE}/api/files/${encodedPath}`, {
@@ -130,4 +85,115 @@ export const deleteFile = async (filename: string): Promise<void> => {
   if (!res.ok) {
     throw new Error('Delete failed');
   }
+};
+
+// ==================== 視頻流 API ====================
+
+/**
+ * 獲取視頻流 URL
+ */
+export const getStreamUrl = (filename: string): string => {
+  const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
+  return `${API_BASE}/api/stream/${encodedPath}`;
+};
+
+// ==================== 縮圖 API ====================
+
+/**
+ * 獲取視頻縮圖 URL（正確的後端端點）
+ */
+export const getThumbnailUrl = (
+  filename: string,
+  options: ThumbnailOptions = {}
+): string => {
+  const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
+  const params = new URLSearchParams();
+  
+  if (options.width) params.append('width', options.width.toString());
+  if (options.height) params.append('height', options.height.toString());
+  if (options.time_offset !== undefined) params.append('time_offset', options.time_offset.toString());
+  if (options.force_regenerate) params.append('force_regenerate', 'true');
+  
+  const queryString = params.toString();
+  // 修正：使用正確的後端端點
+  return `${API_BASE}/api/thumbnails/video/${encodedPath}${queryString ? '?' + queryString : ''}`;
+};
+
+/**
+ * 獲取縮圖（返回 Blob URL）
+ */
+export const fetchThumbnail = async (
+  filename: string,
+  options: ThumbnailOptions = {}
+): Promise<string> => {
+  try {
+    const url = getThumbnailUrl(filename, options);
+    console.log('📸 請求縮圖:', url);
+    
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch thumbnail: ${response.status} ${response.statusText}`);
+    }
+    
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    
+    // 記錄來源
+    const cached = response.headers.get('X-Thumbnail-Cached');
+    console.log(`✓ 縮圖載入 (${filename}): ${cached === 'true' ? '快取' : '新生成'}`);
+    
+    return blobUrl;
+  } catch (error) {
+    console.error('❌ 取得縮圖失敗:', error);
+    throw error;
+  }
+};
+
+/**
+ * 刪除縮圖快取
+ */
+export const deleteThumbnail = async (
+  filename: string,
+  width?: number,
+  height?: number,
+  time_offset?: number
+): Promise<void> => {
+  const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
+  const params = new URLSearchParams();
+  
+  if (width) params.append('width', width.toString());
+  if (height) params.append('height', height.toString());
+  if (time_offset !== undefined) params.append('time_offset', time_offset.toString());
+  
+  const queryString = params.toString();
+  const url = `${API_BASE}/api/thumbnails/video/${encodedPath}${queryString ? '?' + queryString : ''}`;
+  
+  const response = await fetch(url, { method: 'DELETE' });
+  
+  if (!response.ok) {
+    throw new Error('Failed to delete thumbnail');
+  }
+};
+
+// ==================== 健康檢查 ====================
+
+export interface HealthResponse {
+  status: string;
+  authentication: {
+    authenticated: boolean;
+    project: string | null;
+  };
+  bucket: {
+    name: string;
+    accessible: boolean;
+  };
+}
+
+export const healthCheck = async (): Promise<HealthResponse> => {
+  const response = await fetch(`${API_BASE}/api/health`);
+  if (!response.ok) {
+    throw new Error('Health check failed');
+  }
+  return response.json();
 };
