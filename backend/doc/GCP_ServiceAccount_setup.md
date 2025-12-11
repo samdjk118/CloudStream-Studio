@@ -6,19 +6,18 @@
     4. 記下專案 ID（例如：cloudstream-studio-12345）
 ## 2. 啟用必要的 API
     1.設置專案 ID
-    ```shellscript
+    ```bash
     export PROJECT_ID="your-project-id"
     
     # 啟用 Cloud Storage API
     gcloud services enable storage-api.googleapis.com --project=$PROJECT_ID
     ```
-或在 API 庫 中手動啟用：
-- Cloud Storage API
-
+    或在 API 庫 中手動啟用：
+    - Cloud Storage API
 
 ## 3. 創建服務帳號
     方法 1: 使用 gcloud CLI
-    ```shellscript
+    ```bash
     # 設置變數
     export PROJECT_ID="your-project-id"
     export SERVICE_ACCOUNT_NAME="cloudstream-sa"
