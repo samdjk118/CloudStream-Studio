@@ -87,10 +87,10 @@ export const deleteFile = async (filename: string): Promise<void> => {
   }
 };
 
-// ==================== 視頻流 API ====================
+// ==================== 影片流 API ====================
 
 /**
- * 獲取視頻流 URL
+ * 獲取影片流 URL
  */
 export const getStreamUrl = (filename: string): string => {
   const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
@@ -100,7 +100,7 @@ export const getStreamUrl = (filename: string): string => {
 // ==================== 縮圖 API ====================
 
 /**
- * 獲取視頻縮圖 URL（正確的後端端點）
+ * 獲取影片縮圖 URL（正確的後端端點）
  */
 export const getThumbnailUrl = (
   filename: string,
@@ -198,6 +198,43 @@ export const healthCheck = async (): Promise<HealthResponse> => {
   return response.json();
 };
 
+// ==================== 任務狀態類型 ====================
+
+export interface TaskStatus {
+  task_id: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  progress: number;  // 0.0 - 1.0
+  message: string;
+  output_url?: string;
+  output_path?: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+  metadata?: {
+    // 剪輯任務
+    clip_duration?: number;
+    expected_duration?: number;
+    duration_error_ms?: number;
+    duration_error_percent?: number;
+    precision_level?: string;
+    thumbnail_url?: string;
+    
+    // 合併任務
+    total_clips?: number;
+    merged_duration?: number;
+    clip_durations?: number[];
+    
+    // 通用
+    file_size?: number;
+    video_info?: {
+      width: number;
+      height: number;
+      codec: string;
+      fps: number;
+    };
+  };
+}
+
 // ==================== 影片剪輯 ====================
 
 export interface ClipRequest {
@@ -223,7 +260,7 @@ export interface TaskResponse {
 }
 
 /**
- * 剪輯視頻
+ * 剪輯影片
  */
 export const clipVideo = async (request: ClipRequest): Promise<TaskResponse> => {
   // ✅ 確保精度
@@ -244,14 +281,15 @@ export const clipVideo = async (request: ClipRequest): Promise<TaskResponse> => 
   });
 
   if (!response.ok) {
-    throw new Error(`Clip failed: ${response.statusText}`);
+    const errorText = await response.text();
+    throw new Error(`Clip failed: ${errorText}`);
   }
 
   return response.json();
 };
 
 /**
- * 合併視頻
+ * 合併影片
  */
 export const mergeVideos = async (request: MergeRequest): Promise<TaskResponse> => {
   // ✅ 確保所有片段的時間精度
@@ -264,6 +302,8 @@ export const mergeVideos = async (request: MergeRequest): Promise<TaskResponse> 
     })),
   };
 
+  console.log('📤 合併請求:', formattedRequest);
+
   const response = await fetch(`${API_BASE}/api/videos/merge`, {
     method: 'POST',
     headers: {
@@ -273,7 +313,8 @@ export const mergeVideos = async (request: MergeRequest): Promise<TaskResponse> 
   });
 
   if (!response.ok) {
-    throw new Error(`Merge failed: ${response.statusText}`);
+    const errorText = await response.text();
+    throw new Error(`Merge failed: ${errorText}`);
   }
 
   return response.json();
@@ -282,7 +323,7 @@ export const mergeVideos = async (request: MergeRequest): Promise<TaskResponse> 
 /**
  * 獲取任務狀態
  */
-export const getTaskStatus = async (taskId: string): Promise<any> => {
+export const getTaskStatus = async (taskId: string): Promise<TaskStatus> => {
   const response = await fetch(`${API_BASE}/api/tasks/${taskId}`);
   
   if (!response.ok) {
@@ -290,4 +331,38 @@ export const getTaskStatus = async (taskId: string): Promise<any> => {
   }
 
   return response.json();
+};
+
+/**
+ * 輪詢任務狀態直到完成
+ */
+export const pollTaskStatus = async (
+  taskId: string,
+  onProgress?: (status: TaskStatus) => void,
+  interval: number = 2000,
+  timeout: number = 300000  // 5 分鐘
+): Promise<TaskStatus> => {
+  const startTime = Date.now();
+  
+  while (true) {
+    const status = await getTaskStatus(taskId);
+    
+    // 回調進度
+    if (onProgress) {
+      onProgress(status);
+    }
+    
+    // 完成或失敗
+    if (status.status === 'completed' || status.status === 'failed') {
+      return status;
+    }
+    
+    // 超時檢查
+    if (Date.now() - startTime > timeout) {
+      throw new Error('Task timeout');
+    }
+    
+    // 等待後繼續
+    await new Promise(resolve => setTimeout(resolve, interval));
+  }
 };

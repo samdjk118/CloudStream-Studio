@@ -122,16 +122,7 @@ const App: React.FC = () => {
   };
 
   const handleSynthesize = () => {
-    if (clips.length === 0) {
-      alert('No clips to synthesize!');
-      return;
-    }
-    
-    setIsSynthesizing(true);
-    setTimeout(() => {
-      setIsSynthesizing(false);
-      alert(`Synthesis Complete! \n\nMerged ${clips.length} clips.\nOutput would be downloaded from backend.`);
-    }, 2000);
+    console.log('Synthesize triggered from App (deprecated)');
   };
 
   const assetMap = React.useMemo(() => {

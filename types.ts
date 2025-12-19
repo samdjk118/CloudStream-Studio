@@ -32,3 +32,26 @@ export enum GeneratorStatus {
   COMPLETE = 'COMPLETE',
   ERROR = 'ERROR'
 }
+
+export interface VideoAsset {
+  id: string;
+  name: string;
+  url: string;
+  duration: number;
+  source: 'local' | 'bucket';
+  fullPath?: string;
+  size?: number;
+  contentType?: string;
+  thumbnail?: string;
+}
+
+export interface Clip {
+  id: string;
+  sourceVideoId: string;
+  inPoint: number;   // 原影片的開始時間（秒，3位小數）
+  outPoint: number;  // 原影片的結束時間（秒，3位小數）
+  startTime: number; // 在時間軸上的開始位置（秒）
+  duration: number;  // 片段時長（秒，3位小數）
+  outputPath?: string;  // ✅ 剪輯後的 GCS 路徑
+  outputUrl?: string;   // ✅ 剪輯後的公開 URL
+}

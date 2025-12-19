@@ -1,8 +1,7 @@
-// frontend/src/components/Player.tsx
-
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { VideoAsset, Clip } from '../types';
 import { Play, Pause, Scissors, Gauge, AlertCircle, GripHorizontal } from 'lucide-react';
+import { clipVideo, pollTaskStatus, TaskStatus } from '../services/api';  // ✅ 新增
 
 interface PlayerProps {
   video: VideoAsset | null;
@@ -31,6 +30,10 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
   const [startPoint, setStartPoint] = useState(0);
   const [endPoint, setEndPoint] = useState(0);
   
+  // ✅ 新增：剪輯任務狀態
+  const [isClipping, setIsClipping] = useState(false);
+  const [clipTaskStatus, setClipTaskStatus] = useState<TaskStatus | null>(null);
+  
   // 拖曳狀態
   const [isDraggingStart, setIsDraggingStart] = useState(false);
   const [isDraggingEnd, setIsDraggingEnd] = useState(false);
@@ -49,7 +52,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     
     const mins = Math.floor(t / 60);
     const secs = Math.floor(t % 60);
-    const ms = Math.round((t % 1) * 1000); // 毫秒（0-999）
+    const ms = Math.round((t % 1) * 1000);
     
     return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
   };
@@ -83,6 +86,8 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
       setStartPoint(0);
       setEndPoint(video.duration || 0);
       setPlaybackRate(1);
+      setIsClipping(false);  // ✅ 重置剪輯狀態
+      setClipTaskStatus(null);
       
       if (videoRef.current) {
         videoRef.current.currentTime = 0;
@@ -109,7 +114,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
       
       const current = videoRef.current.currentTime;
       
-      // 如果播放超出 end 位置，停止播放並回到 start
       if (current >= endPoint) {
         videoRef.current.pause();
         videoRef.current.currentTime = startPoint;
@@ -117,7 +121,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
         setIsPlaying(false);
       }
       
-      // 如果播放位置在 start 之前，跳到 start
       if (current < startPoint) {
         videoRef.current.currentTime = startPoint;
         setCurrentTime(startPoint);
@@ -125,7 +128,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     };
 
     const intervalId = setInterval(checkPlaybackBounds, 50);
-
     return () => clearInterval(intervalId);
   }, [isPlaying, startPoint, endPoint]);
 
@@ -169,21 +171,19 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
       const rect = scrubberRef.current.getBoundingClientRect();
       const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
       const percentage = x / rect.width;
-      const newTime = roundToPrecision(percentage * duration, 3); // ✅ 保留 3 位小數
+      const newTime = roundToPrecision(percentage * duration, 3);
       
       if (isDraggingStart) {
-        const newStart = Math.min(newTime, endPoint - 0.001); // ✅ 最小間隔 1 毫秒
+        const newStart = Math.min(newTime, endPoint - 0.001);
         setStartPoint(roundToPrecision(newStart, 3));
-        // 拖曳 start 時，同步移動播放頭
         if (videoRef.current) {
           videoRef.current.currentTime = newStart;
           setCurrentTime(newStart);
         }
       } else if (isDraggingEnd) {
-        const newEnd = Math.max(newTime, startPoint + 0.001); // ✅ 最小間隔 1 毫秒
+        const newEnd = Math.max(newTime, startPoint + 0.001);
         setEndPoint(roundToPrecision(newEnd, 3));
       } else if (isDraggingScrubber) {
-        // 拖曳播放指針 - 限制在藍色區間內
         const clampedTime = Math.max(startPoint, Math.min(newTime, endPoint));
         if (videoRef.current) {
           videoRef.current.currentTime = clampedTime;
@@ -193,14 +193,11 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     };
 
     const handleMarkerDragEnd = (e: MouseEvent) => {
-      // 檢查 Start Marker 是點擊還是拖曳
       if (dragStartPosition && isDraggingStart) {
         const deltaX = Math.abs(e.clientX - dragStartPosition.x);
         const deltaY = Math.abs(e.clientY - dragStartPosition.y);
         
-        // 如果移動距離很小（< 5px），視為點擊
         if (deltaX < 5 && deltaY < 5 && videoRef.current) {
-          // 點擊行為：跳轉到 Start 位置
           videoRef.current.currentTime = startPoint;
           setCurrentTime(startPoint);
           console.log('Clicked Start Marker - Jump to:', startPoint.toFixed(3));
@@ -209,7 +206,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
         }
       }
       
-      // 重置狀態
       setIsDraggingStart(false);
       setIsDraggingEnd(false);
       setIsDraggingScrubber(false);
@@ -234,7 +230,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
       videoRef.current.pause();
       setIsPlaying(false);
     } else {
-      // 播放前確保在藍色區間內
       const current = videoRef.current.currentTime;
       if (current < startPoint || current >= endPoint) {
         videoRef.current.currentTime = startPoint;
@@ -255,7 +250,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
-      setCurrentTime(roundToPrecision(videoRef.current.currentTime, 3)); // ✅ 保留 3 位小數
+      setCurrentTime(roundToPrecision(videoRef.current.currentTime, 3));
     }
   };
 
@@ -264,7 +259,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     setIsLoading(false);
     
     if (videoRef.current) {
-      const dur = roundToPrecision(videoRef.current.duration, 3); // ✅ 保留 3 位小數
+      const dur = roundToPrecision(videoRef.current.duration, 3);
       setDuration(dur);
       if (endPoint === 0 || endPoint > dur) {
         setEndPoint(dur);
@@ -325,28 +320,88 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     }
   };
 
-  // ✅ 創建剪輯時使用 3 位小數
-  const handleCreateClip = () => {
-    if (!video) return;
-    
-    const clipDuration = roundToPrecision(endPoint - startPoint, 3);
-    
-    const newClip: Clip = {
-      id: crypto.randomUUID(),
-      sourceVideoId: video.id,
-      name: `${video.name} (${formatTime(startPoint)}-${formatTime(endPoint)})`,
-      startTime: roundToPrecision(startPoint, 3), // ✅ 3 位小數
-      endTime: roundToPrecision(endPoint, 3),     // ✅ 3 位小數
-    };
-    
-    console.log('📌 創建剪輯:', {
-      name: newClip.name,
-      startTime: newClip.startTime,
-      endTime: newClip.endTime,
-      duration: clipDuration
-    });
-    
-    onAddClip(newClip);
+  // ✅ 修改：創建剪輯並調用後端 API
+  const handleCreateClip = async () => {
+    if (!video) {
+      alert('請先選擇視頻');
+      return;
+    }
+
+    if (startPoint >= endPoint) {
+      alert('開始時間必須小於結束時間');
+      return;
+    }
+
+    if (endPoint - startPoint < 0.1) {
+      alert('片段時長至少需要 0.1 秒');
+      return;
+    }
+
+    setIsClipping(true);
+    setClipTaskStatus(null);
+
+    try {
+      // 生成輸出文件名
+      const timestamp = Date.now();
+      const outputName = `clip_${startPoint.toFixed(3)}-${endPoint.toFixed(3)}_${timestamp}.mp4`;
+
+      console.log('🎬 開始剪輯:', {
+        source: video.fullPath || video.name,
+        start: startPoint,
+        end: endPoint,
+        output: outputName
+      });
+
+      // ✅ 發送剪輯請求
+      const response = await clipVideo({
+        source_video: video.fullPath || video.name,
+        start_time: startPoint,
+        end_time: endPoint,
+        output_name: outputName
+      });
+
+      console.log('✅ 任務已創建:', response);
+
+      // ✅ 輪詢任務狀態
+      const finalStatus = await pollTaskStatus(
+        response.task_id,
+        (status) => {
+          console.log('📊 任務進度:', status);
+          setClipTaskStatus(status);
+        },
+        2000,
+        300000
+      );
+
+      if (finalStatus.status === 'completed') {
+        console.log('✅ 剪輯完成:', finalStatus);
+
+        // ✅ 添加到時間軸
+        const newClip: Clip = {
+          id: crypto.randomUUID(),
+          sourceVideoId: video.id,
+          name: `${video.name} (${formatTime(startPoint)}-${formatTime(endPoint)})`,
+          startTime: roundToPrecision(startPoint, 3),
+          endTime: roundToPrecision(endPoint, 3),
+        };
+
+        onAddClip(newClip);
+
+        alert(`✅ 剪輯完成！\n\n` +
+              `時長: ${finalStatus.metadata?.clip_duration?.toFixed(3)}s\n` +
+              `誤差: ${finalStatus.metadata?.duration_error_ms}ms\n` +
+              `精度: ${finalStatus.metadata?.precision_level}`);
+      } else {
+        throw new Error(finalStatus.error || '剪輯失敗');
+      }
+
+    } catch (error) {
+      console.error('❌ 剪輯失敗:', error);
+      alert(`剪輯失敗: ${error instanceof Error ? error.message : '未知錯誤'}`);
+    } finally {
+      setIsClipping(false);
+      setClipTaskStatus(null);
+    }
   };
 
   // 處理直接點擊時間軸
@@ -356,9 +411,8 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     const rect = scrubberRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percentage = x / rect.width;
-    const clickedTime = roundToPrecision(percentage * duration, 3); // ✅ 3 位小數
+    const clickedTime = roundToPrecision(percentage * duration, 3);
     
-    // 限制在藍色區間內
     const clampedTime = Math.max(startPoint, Math.min(clickedTime, endPoint));
     
     videoRef.current.currentTime = clampedTime;
@@ -464,6 +518,17 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
             </div>
           </div>
         )}
+
+        {/* ✅ 剪輯進度提示 */}
+        {isClipping && clipTaskStatus && (
+          <div className="absolute bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-3">
+            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            <div className="text-sm">
+              <div className="font-semibold">剪輯中...</div>
+              <div className="text-xs opacity-90">{Math.round(clipTaskStatus.progress * 100)}%</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Resize Handle */}
@@ -490,16 +555,13 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
           ref={scrubberRef} 
           className="relative h-12 flex items-center shrink-0"
           onMouseDown={(e) => {
-            // 只有點擊背景軌道時才觸發
             if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('timeline-track')) {
               handleTimelineClick(e);
             }
           }}
         >
-            {/* Background Track */}
             <div className="timeline-track absolute left-0 right-0 h-2 bg-[#333] rounded pointer-events-auto"></div>
 
-            {/* Selected Range Highlight */}
             {duration > 0 && (
               <div 
                 className="absolute h-2 bg-blue-600/60 rounded cursor-pointer pointer-events-auto"
@@ -514,7 +576,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
               ></div>
             )}
 
-            {/* Playhead */}
             {duration > 0 && currentTime >= startPoint && currentTime <= endPoint && (
               <div 
                 className={`absolute w-0.5 h-8 bg-white z-20 cursor-ew-resize group/playhead transition-all ${
@@ -540,7 +601,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                   isDraggingScrubber ? 'scale-150 bg-blue-400' : ''
                 }`}></div>
                 
-                {/* ✅ 顯示毫秒精度 */}
                 <div className={`absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] px-2 py-1 rounded whitespace-nowrap pointer-events-none transition-all ${
                   isDraggingScrubber 
                     ? 'bg-blue-500 text-white opacity-100 scale-110' 
@@ -553,7 +613,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
               </div>
             )}
 
-            {/* Start Marker */}
             {duration > 0 && (
               <div 
                 className="absolute w-4 h-8 bg-blue-500 rounded-l cursor-ew-resize z-30 flex items-center justify-center group hover:bg-blue-400 active:bg-blue-600 transition-colors"
@@ -575,14 +634,12 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                 }}
               >
                 <div className="w-0.5 h-4 bg-white/50"></div>
-                {/* ✅ 顯示毫秒精度 */}
                 <div className="absolute -top-8 bg-blue-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none shadow-lg">
                   Start: {formatTime(startPoint)} • Click to jump
                 </div>
               </div>
             )}
 
-            {/* End Marker */}
             {duration > 0 && (
               <div 
                 className="absolute w-4 h-8 bg-blue-500 rounded-r cursor-ew-resize z-30 flex items-center justify-center group hover:bg-blue-400 active:bg-blue-600 transition-colors"
@@ -601,7 +658,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                 }}
               >
                 <div className="w-0.5 h-4 bg-white/50"></div>
-                {/* ✅ 顯示毫秒精度 */}
                 <div className="absolute -top-8 bg-blue-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none shadow-lg">
                   End: {formatTime(endPoint)}
                 </div>
@@ -613,7 +669,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
         <div className="flex justify-between items-start shrink-0 gap-4">
           {/* 左側：播放控制區 */}
           <div className="flex flex-col gap-3">
-            {/* 第一行：播放按鈕 + 時間 */}
             <div className="flex gap-4 items-center">
               <button 
                 onClick={togglePlay}
@@ -623,15 +678,12 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                 {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
               </button>
               
-              {/* ✅ 顯示毫秒精度 */}
               <div className="text-sm font-mono text-gray-400 shrink-0">
                 {formatTime(currentTime)} <span className="text-gray-600">/</span> {formatTime(duration)}
               </div>
             </div>
 
-            {/* 第二行：速度控制 + 區間資訊 */}
             <div className="flex gap-4 items-center ml-14">
-              {/* Speed Control */}
               <div className="flex items-center gap-2 group relative shrink-0">
                 <Gauge className="w-4 h-4 text-gray-500" />
                 <input 
@@ -647,7 +699,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                 <span className="text-xs text-gray-400 font-mono w-8 text-right">{playbackRate.toFixed(1)}x</span>
               </div>
 
-              {/* ✅ 顯示毫秒精度的區間資訊 */}
               <div className="text-xs font-mono text-blue-400 bg-blue-900/20 px-2 py-1 rounded border border-blue-500/30 shrink-0">
                 Clip: {formatTime(startPoint)} → {formatTime(endPoint)} ({formatTime(endPoint - startPoint)})
               </div>
@@ -658,7 +709,6 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
           <div className="flex gap-4 items-center bg-[#111] p-2 rounded-lg border border-[#333] shrink-0">
             <div className="flex flex-col gap-1">
               <label className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Start</label>
-              {/* ✅ 輸入框支持毫秒 */}
               <input 
                 type="text" 
                 value={formatTime(startPoint)} 
@@ -667,13 +717,12 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                   setStartPoint(Math.min(newTime, endPoint - 0.001));
                 }}
                 placeholder="0:00.000"
-                disabled={!duration}
+                disabled={!duration || isClipping}
                 className="w-24 bg-[#222] border border-[#444] text-white text-xs p-1 rounded focus:border-blue-500 outline-none disabled:opacity-50 text-center font-mono"
               />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">End</label>
-              {/* ✅ 輸入框支持毫秒 */}
               <input 
                 type="text" 
                 value={formatTime(endPoint)} 
@@ -682,23 +731,32 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                   setEndPoint(Math.max(newTime, startPoint + 0.001));
                 }}
                 placeholder="0:00.000"
-                disabled={!duration}
+                disabled={!duration || isClipping}
                 className="w-24 bg-[#222] border border-[#444] text-white text-xs p-1 rounded focus:border-blue-500 outline-none disabled:opacity-50 text-center font-mono"
               />
             </div>
             <div className="h-8 w-px bg-[#333] mx-2"></div>
+            {/* ✅ 修改按鈕：添加 loading 狀態 */}
             <button 
               onClick={handleCreateClip}
-              disabled={!duration || startPoint >= endPoint}
+              disabled={!duration || startPoint >= endPoint || isClipping}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-medium transition disabled:bg-gray-600 disabled:cursor-not-allowed"
             >
-              <Scissors className="w-4 h-4" />
-              Clip & Add
+              {isClipping ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  處理中...
+                </>
+              ) : (
+                <>
+                  <Scissors className="w-4 h-4" />
+                  Clip & Add
+                </>
+              )}
             </button>
           </div>
         </div>
 
-        {/* 高度指示器 */}
         <div className="text-[10px] text-gray-600 text-center shrink-0">
           Controls Height: {controlsHeight}px (Drag the line above to resize)
         </div>
