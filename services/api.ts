@@ -197,3 +197,97 @@ export const healthCheck = async (): Promise<HealthResponse> => {
   }
   return response.json();
 };
+
+// ==================== 影片剪輯 ====================
+
+export interface ClipRequest {
+  source_video: string;
+  start_time: number;  // 3位小數
+  end_time: number;    // 3位小數
+  output_name: string;
+}
+
+export interface MergeRequest {
+  clips: Array<{
+    source_video: string;
+    start_time: number;
+    end_time: number;
+  }>;
+  output_name: string;
+}
+
+export interface TaskResponse {
+  task_id: string;
+  message: string;
+  status_url: string;
+}
+
+/**
+ * 剪輯視頻
+ */
+export const clipVideo = async (request: ClipRequest): Promise<TaskResponse> => {
+  // ✅ 確保精度
+  const formattedRequest = {
+    ...request,
+    start_time: parseFloat(request.start_time.toFixed(3)),
+    end_time: parseFloat(request.end_time.toFixed(3)),
+  };
+
+  console.log('📤 剪輯請求:', formattedRequest);
+
+  const response = await fetch(`${API_BASE}/api/videos/clip`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(formattedRequest),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Clip failed: ${response.statusText}`);
+  }
+
+  return response.json();
+};
+
+/**
+ * 合併視頻
+ */
+export const mergeVideos = async (request: MergeRequest): Promise<TaskResponse> => {
+  // ✅ 確保所有片段的時間精度
+  const formattedRequest = {
+    ...request,
+    clips: request.clips.map(clip => ({
+      ...clip,
+      start_time: parseFloat(clip.start_time.toFixed(3)),
+      end_time: parseFloat(clip.end_time.toFixed(3)),
+    })),
+  };
+
+  const response = await fetch(`${API_BASE}/api/videos/merge`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(formattedRequest),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Merge failed: ${response.statusText}`);
+  }
+
+  return response.json();
+};
+
+/**
+ * 獲取任務狀態
+ */
+export const getTaskStatus = async (taskId: string): Promise<any> => {
+  const response = await fetch(`${API_BASE}/api/tasks/${taskId}`);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to get task status: ${response.statusText}`);
+  }
+
+  return response.json();
+};

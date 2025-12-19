@@ -1,3 +1,5 @@
+// frontend/src/components/Player.tsx
+
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { VideoAsset, Clip } from '../types';
 import { Play, Pause, Scissors, Gauge, AlertCircle, GripHorizontal } from 'lucide-react';
@@ -25,7 +27,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
   const resizeStartY = useRef(0);
   const resizeStartHeight = useRef(0);
   
-  // Clipping state
+  // Clipping state - ✅ 使用 3 位小數精度
   const [startPoint, setStartPoint] = useState(0);
   const [endPoint, setEndPoint] = useState(0);
   
@@ -34,6 +36,41 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
   const [isDraggingEnd, setIsDraggingEnd] = useState(false);
   const [isDraggingScrubber, setIsDraggingScrubber] = useState(false);
   const [dragStartPosition, setDragStartPosition] = useState<{ x: number; y: number } | null>(null);
+
+  // ✅ 精度工具函數
+  const roundToPrecision = (value: number, precision: number = 3): number => {
+    const multiplier = Math.pow(10, precision);
+    return Math.round(value * multiplier) / multiplier;
+  };
+
+  // ✅ 修改時間格式函數 - 支持毫秒（3位小數）
+  const formatTime = (t: number): string => {
+    if (!isFinite(t)) return '0:00.000';
+    
+    const mins = Math.floor(t / 60);
+    const secs = Math.floor(t % 60);
+    const ms = Math.round((t % 1) * 1000); // 毫秒（0-999）
+    
+    return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+  };
+
+  // ✅ 將 分:秒.毫秒 轉換回秒數（3位小數）
+  const parseTimeString = (timeStr: string): number => {
+    try {
+      const parts = timeStr.split(':');
+      if (parts.length !== 2) return 0;
+      
+      const mins = parseInt(parts[0]) || 0;
+      const secsParts = parts[1].split('.');
+      const secs = parseInt(secsParts[0]) || 0;
+      const ms = secsParts[1] ? parseInt(secsParts[1].padEnd(3, '0').slice(0, 3)) : 0;
+      
+      const totalSeconds = mins * 60 + secs + ms / 1000;
+      return roundToPrecision(totalSeconds, 3);
+    } catch {
+      return 0;
+    }
+  };
 
   // Reset state when video changes
   useEffect(() => {
@@ -132,18 +169,19 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
       const rect = scrubberRef.current.getBoundingClientRect();
       const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
       const percentage = x / rect.width;
-      const newTime = percentage * duration;
+      const newTime = roundToPrecision(percentage * duration, 3); // ✅ 保留 3 位小數
       
       if (isDraggingStart) {
-        const newStart = Math.min(newTime, endPoint - 0.1);
-        setStartPoint(newStart);
+        const newStart = Math.min(newTime, endPoint - 0.001); // ✅ 最小間隔 1 毫秒
+        setStartPoint(roundToPrecision(newStart, 3));
         // 拖曳 start 時，同步移動播放頭
         if (videoRef.current) {
           videoRef.current.currentTime = newStart;
           setCurrentTime(newStart);
         }
       } else if (isDraggingEnd) {
-        setEndPoint(Math.max(newTime, startPoint + 0.1));
+        const newEnd = Math.max(newTime, startPoint + 0.001); // ✅ 最小間隔 1 毫秒
+        setEndPoint(roundToPrecision(newEnd, 3));
       } else if (isDraggingScrubber) {
         // 拖曳播放指針 - 限制在藍色區間內
         const clampedTime = Math.max(startPoint, Math.min(newTime, endPoint));
@@ -165,21 +203,9 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
           // 點擊行為：跳轉到 Start 位置
           videoRef.current.currentTime = startPoint;
           setCurrentTime(startPoint);
-          console.log('Clicked Start Marker - Jump to:', startPoint);
+          console.log('Clicked Start Marker - Jump to:', startPoint.toFixed(3));
         } else {
-          console.log('Dragged Start Marker - New position:', startPoint);
-        }
-      }
-      
-      // 檢查播放指針是點擊還是拖曳
-      if (dragStartPosition && isDraggingScrubber) {
-        const deltaX = Math.abs(e.clientX - dragStartPosition.x);
-        const deltaY = Math.abs(e.clientY - dragStartPosition.y);
-        
-        if (deltaX < 5 && deltaY < 5) {
-          console.log('Clicked Playhead - No action');
-        } else {
-          console.log('Dragged Playhead - New time:', currentTime);
+          console.log('Dragged Start Marker - New position:', startPoint.toFixed(3));
         }
       }
       
@@ -229,7 +255,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
+      setCurrentTime(roundToPrecision(videoRef.current.currentTime, 3)); // ✅ 保留 3 位小數
     }
   };
 
@@ -238,7 +264,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     setIsLoading(false);
     
     if (videoRef.current) {
-      const dur = videoRef.current.duration;
+      const dur = roundToPrecision(videoRef.current.duration, 3); // ✅ 保留 3 位小數
       setDuration(dur);
       if (endPoint === 0 || endPoint > dur) {
         setEndPoint(dur);
@@ -299,35 +325,28 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     }
   };
 
+  // ✅ 創建剪輯時使用 3 位小數
   const handleCreateClip = () => {
     if (!video) return;
+    
+    const clipDuration = roundToPrecision(endPoint - startPoint, 3);
+    
     const newClip: Clip = {
       id: crypto.randomUUID(),
       sourceVideoId: video.id,
-      name: `${video.name} (Clip ${formatTime(startPoint)}-${formatTime(endPoint)})`,
-      startTime: startPoint,
-      endTime: endPoint,
+      name: `${video.name} (${formatTime(startPoint)}-${formatTime(endPoint)})`,
+      startTime: roundToPrecision(startPoint, 3), // ✅ 3 位小數
+      endTime: roundToPrecision(endPoint, 3),     // ✅ 3 位小數
     };
+    
+    console.log('📌 創建剪輯:', {
+      name: newClip.name,
+      startTime: newClip.startTime,
+      endTime: newClip.endTime,
+      duration: clipDuration
+    });
+    
     onAddClip(newClip);
-  };
-
-  // 修改時間格式函數 - 分:秒:毫秒（兩位數）
-  const formatTime = (t: number) => {
-    if (!isFinite(t)) return '0:00:00';
-    const mins = Math.floor(t / 60);
-    const secs = Math.floor(t % 60);
-    const ms = Math.floor((t % 1) * 100); // 取兩位毫秒（0-99）
-    return `${mins}:${secs.toString().padStart(2, '0')}:${ms.toString().padStart(2, '0')}`;
-  };
-
-  // 將 分:秒:毫秒 轉換回秒數
-  const parseTimeString = (timeStr: string): number => {
-    const parts = timeStr.split(':');
-    if (parts.length !== 3) return 0;
-    const mins = parseInt(parts[0]) || 0;
-    const secs = parseInt(parts[1]) || 0;
-    const ms = parseInt(parts[2]) || 0;
-    return mins * 60 + secs + ms / 100; // 毫秒部分除以100
   };
 
   // 處理直接點擊時間軸
@@ -337,7 +356,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     const rect = scrubberRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percentage = x / rect.width;
-    const clickedTime = percentage * duration;
+    const clickedTime = roundToPrecision(percentage * duration, 3); // ✅ 3 位小數
     
     // 限制在藍色區間內
     const clampedTime = Math.max(startPoint, Math.min(clickedTime, endPoint));
@@ -346,12 +365,8 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
     setCurrentTime(clampedTime);
     
     console.log('Timeline clicked:', {
-      x,
-      percentage: percentage.toFixed(3),
-      clickedTime: clickedTime.toFixed(2),
-      clampedTime: clampedTime.toFixed(2),
-      startPoint: startPoint.toFixed(2),
-      endPoint: endPoint.toFixed(2)
+      clickedTime: clickedTime.toFixed(3),
+      clampedTime: clampedTime.toFixed(3)
     });
   };
 
@@ -499,7 +514,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
               ></div>
             )}
 
-            {/* Playhead - 可拖曳的播放指針（進階版）*/}
+            {/* Playhead */}
             {duration > 0 && currentTime >= startPoint && currentTime <= endPoint && (
               <div 
                 className={`absolute w-0.5 h-8 bg-white z-20 cursor-ew-resize group/playhead transition-all ${
@@ -512,23 +527,20 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                   e.stopPropagation();
                   e.preventDefault();
                   
-                  // 記錄按下時的位置
                   setDragStartPosition({ x: e.clientX, y: e.clientY });
                   setIsDraggingScrubber(true);
                   
-                  // 暫停播放
                   if (isPlaying && videoRef.current) {
                     videoRef.current.pause();
                     setIsPlaying(false);
                   }
                 }}
               >
-                {/* 頂部的菱形拖曳把手 */}
                 <div className={`absolute -top-1 -left-1.5 w-3 h-3 bg-white rotate-45 cursor-ew-resize hover:scale-125 transition-all ${
                   isDraggingScrubber ? 'scale-150 bg-blue-400' : ''
                 }`}></div>
                 
-                {/* 時間提示 */}
+                {/* ✅ 顯示毫秒精度 */}
                 <div className={`absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] px-2 py-1 rounded whitespace-nowrap pointer-events-none transition-all ${
                   isDraggingScrubber 
                     ? 'bg-blue-500 text-white opacity-100 scale-110' 
@@ -537,12 +549,11 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                   {formatTime(currentTime)}
                 </div>
                 
-                {/* 底部的拖曳區域 */}
                 <div className="absolute -left-3 -right-3 -top-2 -bottom-2 cursor-ew-resize"></div>
               </div>
             )}
 
-            {/* Start Marker - 可拖曳，點擊跳轉 */}
+            {/* Start Marker */}
             {duration > 0 && (
               <div 
                 className="absolute w-4 h-8 bg-blue-500 rounded-l cursor-ew-resize z-30 flex items-center justify-center group hover:bg-blue-400 active:bg-blue-600 transition-colors"
@@ -554,11 +565,9 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                   e.stopPropagation();
                   e.preventDefault();
                   
-                  // 記錄按下時的位置
                   setDragStartPosition({ x: e.clientX, y: e.clientY });
                   setIsDraggingStart(true);
                   
-                  // 暫停播放
                   if (isPlaying && videoRef.current) {
                     videoRef.current.pause();
                     setIsPlaying(false);
@@ -566,13 +575,14 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                 }}
               >
                 <div className="w-0.5 h-4 bg-white/50"></div>
+                {/* ✅ 顯示毫秒精度 */}
                 <div className="absolute -top-8 bg-blue-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none shadow-lg">
                   Start: {formatTime(startPoint)} • Click to jump
                 </div>
               </div>
             )}
 
-            {/* End Marker - 可拖曳 */}
+            {/* End Marker */}
             {duration > 0 && (
               <div 
                 className="absolute w-4 h-8 bg-blue-500 rounded-r cursor-ew-resize z-30 flex items-center justify-center group hover:bg-blue-400 active:bg-blue-600 transition-colors"
@@ -591,6 +601,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                 }}
               >
                 <div className="w-0.5 h-4 bg-white/50"></div>
+                {/* ✅ 顯示毫秒精度 */}
                 <div className="absolute -top-8 bg-blue-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none shadow-lg">
                   End: {formatTime(endPoint)}
                 </div>
@@ -612,6 +623,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                 {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
               </button>
               
+              {/* ✅ 顯示毫秒精度 */}
               <div className="text-sm font-mono text-gray-400 shrink-0">
                 {formatTime(currentTime)} <span className="text-gray-600">/</span> {formatTime(duration)}
               </div>
@@ -635,7 +647,7 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
                 <span className="text-xs text-gray-400 font-mono w-8 text-right">{playbackRate.toFixed(1)}x</span>
               </div>
 
-              {/* 顯示藍色區間資訊 */}
+              {/* ✅ 顯示毫秒精度的區間資訊 */}
               <div className="text-xs font-mono text-blue-400 bg-blue-900/20 px-2 py-1 rounded border border-blue-500/30 shrink-0">
                 Clip: {formatTime(startPoint)} → {formatTime(endPoint)} ({formatTime(endPoint - startPoint)})
               </div>
@@ -646,30 +658,32 @@ export const Player: React.FC<PlayerProps> = ({ video, onAddClip, autoPlay = fal
           <div className="flex gap-4 items-center bg-[#111] p-2 rounded-lg border border-[#333] shrink-0">
             <div className="flex flex-col gap-1">
               <label className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Start</label>
+              {/* ✅ 輸入框支持毫秒 */}
               <input 
                 type="text" 
                 value={formatTime(startPoint)} 
                 onChange={(e) => {
                   const newTime = parseTimeString(e.target.value);
-                  setStartPoint(Math.min(newTime, endPoint - 0.1));
+                  setStartPoint(Math.min(newTime, endPoint - 0.001));
                 }}
-                placeholder="0:00:00"
+                placeholder="0:00.000"
                 disabled={!duration}
-                className="w-20 bg-[#222] border border-[#444] text-white text-xs p-1 rounded focus:border-blue-500 outline-none disabled:opacity-50 text-center font-mono"
+                className="w-24 bg-[#222] border border-[#444] text-white text-xs p-1 rounded focus:border-blue-500 outline-none disabled:opacity-50 text-center font-mono"
               />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">End</label>
+              {/* ✅ 輸入框支持毫秒 */}
               <input 
                 type="text" 
                 value={formatTime(endPoint)} 
                 onChange={(e) => {
                   const newTime = parseTimeString(e.target.value);
-                  setEndPoint(Math.max(newTime, startPoint + 0.1));
+                  setEndPoint(Math.max(newTime, startPoint + 0.001));
                 }}
-                placeholder="0:00:00"
+                placeholder="0:00.000"
                 disabled={!duration}
-                className="w-20 bg-[#222] border border-[#444] text-white text-xs p-1 rounded focus:border-blue-500 outline-none disabled:opacity-50 text-center font-mono"
+                className="w-24 bg-[#222] border border-[#444] text-white text-xs p-1 rounded focus:border-blue-500 outline-none disabled:opacity-50 text-center font-mono"
               />
             </div>
             <div className="h-8 w-px bg-[#333] mx-2"></div>
