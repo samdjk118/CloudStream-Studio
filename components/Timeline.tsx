@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Clip, VideoAsset } from '../types';
-import { Trash2, Play, Film, Sparkles, GripHorizontal } from 'lucide-react';
-import { mergeVideos, pollTaskStatus, TaskStatus } from '../services/api';  // ✅ 新增
+import { Trash2, Play, Film, Sparkles, GripHorizontal, Eye } from 'lucide-react';
+import { mergeVideos, pollTaskStatus, TaskStatus } from '../services/api';
 
 interface TimelineProps {
   clips: Clip[];
@@ -9,14 +9,18 @@ interface TimelineProps {
   onRemoveClip: (clipId: string) => void;
   onSynthesize: () => void;
   isSynthesizing: boolean;
+  onSynthesizeComplete?: (outputPath: string) => void;
+  onPreviewClip?: (clip: Clip) => void;
 }
 
 export const Timeline: React.FC<TimelineProps> = ({
   clips,
   assets,
   onRemoveClip,
-  onSynthesize: _onSynthesize,  // 不使用這個，我們自己管理
-  isSynthesizing: _isSynthesizing  // 不使用這個，我們自己管理
+  onSynthesize: _onSynthesize,
+  isSynthesizing: _isSynthesizing,
+  onSynthesizeComplete,
+  onPreviewClip
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [timelineHeight, setTimelineHeight] = useState(240);
@@ -24,7 +28,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   const resizeStartY = useRef(0);
   const resizeStartHeight = useRef(0);
 
-  // ✅ 新增：合併任務狀態
+  // 合併任務狀態
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [synthesizeTaskStatus, setSynthesizeTaskStatus] = useState<TaskStatus | null>(null);
 
@@ -83,7 +87,7 @@ export const Timeline: React.FC<TimelineProps> = ({
 
   const totalDuration = clips.reduce((sum, clip) => sum + (clip.endTime - clip.startTime), 0);
 
-  // ✅ 修改：合成視頻並調用後端 API
+  // ✅ 合成視頻並調用後端 API
   const handleSynthesize = async () => {
     if (clips.length === 0) {
       alert('沒有片段可以合成');
@@ -94,7 +98,6 @@ export const Timeline: React.FC<TimelineProps> = ({
     setSynthesizeTaskStatus(null);
 
     try {
-      // 準備合併請求
       const timestamp = Date.now();
       const outputName = `merged_${timestamp}.mp4`;
 
@@ -112,11 +115,9 @@ export const Timeline: React.FC<TimelineProps> = ({
 
       console.log('🔗 開始合併:', mergeRequest);
 
-      // ✅ 發送合併請求
       const response = await mergeVideos(mergeRequest);
       console.log('✅ 合併任務已創建:', response);
 
-      // ✅ 輪詢任務狀態
       const finalStatus = await pollTaskStatus(
         response.task_id,
         (status) => {
@@ -124,7 +125,7 @@ export const Timeline: React.FC<TimelineProps> = ({
           setSynthesizeTaskStatus(status);
         },
         2000,
-        600000  // 10 分鐘超時
+        600000
       );
 
       if (finalStatus.status === 'completed') {
@@ -132,16 +133,29 @@ export const Timeline: React.FC<TimelineProps> = ({
 
         const metadata = finalStatus.metadata;
         
+        // ✅ 顯示成功訊息
         alert(`✅ 合併完成！\n\n` +
               `片段數: ${metadata?.total_clips}\n` +
               `總時長: ${metadata?.merged_duration?.toFixed(3)}s\n` +
               `誤差: ${metadata?.duration_error_ms}ms\n` +
               `精度: ${metadata?.precision_level}\n\n` +
-              `輸出: ${finalStatus.output_url}`);
+              `正在載入合成影片...`);
 
-        // 可選：自動打開結果
+        // ✅ 清空所有片段
+        console.log('🗑️ 清空時間軸片段');
+        clips.forEach(clip => onRemoveClip(clip.id));
+
+        // ✅ 通知父組件選取新影片
+        if (finalStatus.output_path && onSynthesizeComplete) {
+          console.log('📹 選取合成影片:', finalStatus.output_path);
+          onSynthesizeComplete(finalStatus.output_path);
+        }
+
+        // 可選：延遲打開結果
         if (finalStatus.output_url) {
-          window.open(finalStatus.output_url, '_blank');
+          setTimeout(() => {
+            window.open(finalStatus.output_url, '_blank');
+          }, 1000);
         }
 
       } else {
@@ -189,7 +203,6 @@ export const Timeline: React.FC<TimelineProps> = ({
               Total: {formatTime(totalDuration)}
             </div>
           )}
-          {/* ✅ 顯示合併進度 */}
           {isSynthesizing && synthesizeTaskStatus && (
             <div className="text-xs text-blue-400 bg-blue-900/20 px-2 py-1 rounded border border-blue-500/30">
               {Math.round(synthesizeTaskStatus.progress * 100)}% - {synthesizeTaskStatus.message}
@@ -197,7 +210,6 @@ export const Timeline: React.FC<TimelineProps> = ({
           )}
         </div>
         
-        {/* ✅ 修改按鈕：添加 loading 狀態 */}
         <button
           onClick={handleSynthesize}
           disabled={clips.length === 0 || isSynthesizing}
@@ -238,13 +250,20 @@ export const Timeline: React.FC<TimelineProps> = ({
                   key={clip.id}
                   className="group relative bg-[#222] border border-[#333] rounded-lg p-3 hover:border-blue-500/50 transition-all"
                 >
+                  {/* Clip Number Badge */}
                   <div className="absolute -left-2 -top-2 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-lg">
                     {index + 1}
                   </div>
 
                   <div className="flex items-center gap-3">
-                    <div className="w-24 h-14 bg-black rounded flex items-center justify-center text-gray-600 shrink-0 relative overflow-hidden">
-                      <Play className="w-6 h-6 absolute" />
+                    {/* ✅ 可點擊的縮圖 - 預覽片段 */}
+                    <div 
+                      className="w-24 h-14 bg-black rounded flex items-center justify-center text-gray-600 shrink-0 relative overflow-hidden cursor-pointer hover:ring-2 hover:ring-blue-500 transition group/thumb"
+                      onClick={() => onPreviewClip && onPreviewClip(clip)}
+                      title="點擊預覽此片段"
+                    >
+                      <Play className="w-6 h-6 absolute opacity-50 group-hover/thumb:opacity-100 transition" />
+                      <Eye className="w-4 h-4 absolute top-1 right-1 opacity-0 group-hover/thumb:opacity-100 transition text-blue-400" />
                       {asset && (
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent flex items-end p-1">
                           <span className="text-[10px] text-white font-mono">
@@ -254,6 +273,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                       )}
                     </div>
 
+                    {/* Clip Info */}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-white font-medium truncate" title={clip.name}>
                         {clip.name}
@@ -278,17 +298,26 @@ export const Timeline: React.FC<TimelineProps> = ({
                       )}
                     </div>
 
+                    {/* ✅ Actions - 添加預覽按鈕 */}
                     <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => onPreviewClip && onPreviewClip(clip)}
+                        className="p-2 hover:bg-blue-600/20 rounded text-gray-400 hover:text-blue-400 transition"
+                        title="預覽片段"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
                       <button
                         onClick={() => onRemoveClip(clip.id)}
                         className="p-2 hover:bg-red-600/20 rounded text-gray-400 hover:text-red-400 transition"
-                        title="Remove clip"
+                        title="移除片段"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
 
+                  {/* Progress Bar */}
                   <div className="mt-2 h-1 bg-[#333] rounded-full overflow-hidden">
                     <div 
                       className="h-full bg-gradient-to-r from-blue-600 to-purple-600"

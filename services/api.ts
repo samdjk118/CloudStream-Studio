@@ -237,13 +237,6 @@ export interface TaskStatus {
 
 // ==================== 影片剪輯 ====================
 
-export interface ClipRequest {
-  source_video: string;
-  start_time: number;  // 3位小數
-  end_time: number;    // 3位小數
-  output_name: string;
-}
-
 export interface MergeRequest {
   clips: Array<{
     source_video: string;
@@ -259,34 +252,6 @@ export interface TaskResponse {
   status_url: string;
 }
 
-/**
- * 剪輯影片
- */
-export const clipVideo = async (request: ClipRequest): Promise<TaskResponse> => {
-  // ✅ 確保精度
-  const formattedRequest = {
-    ...request,
-    start_time: parseFloat(request.start_time.toFixed(3)),
-    end_time: parseFloat(request.end_time.toFixed(3)),
-  };
-
-  console.log('📤 剪輯請求:', formattedRequest);
-
-  const response = await fetch(`${API_BASE}/api/videos/clip`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(formattedRequest),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Clip failed: ${errorText}`);
-  }
-
-  return response.json();
-};
 
 /**
  * 合併影片

@@ -13,6 +13,9 @@ const App: React.FC = () => {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [isLoadingBucket, setIsLoadingBucket] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  
+  // ✅ 新增：預覽時間點
+  const [previewClipTime, setPreviewClipTime] = useState<{ start: number; end: number } | null>(null);
 
   const convertToVideoAsset = (file: GCSFile, index: number): VideoAsset => {
     const displayName = file.name.split('/').pop() || file.name;
@@ -97,7 +100,6 @@ const App: React.FC = () => {
     }
 
     try {
-      // 直接使用 stream URL 下載
       const link = document.createElement('a');
       link.href = currentVideo.url;
       link.download = currentVideo.name;
@@ -124,6 +126,80 @@ const App: React.FC = () => {
   const handleSynthesize = () => {
     console.log('Synthesize triggered from App (deprecated)');
   };
+
+  // ✅ 新增：處理片段預覽
+  const handlePreviewClip = (clip: Clip) => {
+    const asset = videos.find(v => v.id === clip.sourceVideoId);
+    
+    if (!asset) {
+      console.warn('找不到源視頻:', clip.sourceVideoId);
+      return;
+    }
+
+    console.log('🎬 預覽片段:', {
+      video: asset.name,
+      start: clip.startTime,
+      end: clip.endTime
+    });
+
+    // 切換到源視頻
+    setCurrentVideo(asset);
+    
+    // 設置預覽時間點
+    setPreviewClipTime({
+      start: clip.startTime,
+      end: clip.endTime
+    });
+  };
+
+  // ✅ 新增：處理合成完成
+  const handleSynthesizeComplete = async (outputPath: string) => {
+    console.log('🎬 合成完成，準備選取新影片:', outputPath);
+    
+    try {
+      // 重新載入文件列表
+      await loadFiles();
+      
+      // 延遲一下確保文件列表更新
+      setTimeout(() => {
+        const synthesizedVideo = videos.find(v => v.fullPath === outputPath);
+        
+        if (synthesizedVideo) {
+          console.log('✅ 找到合成影片，自動選取:', synthesizedVideo.name);
+          setCurrentVideo(synthesizedVideo);
+          setPreviewClipTime(null); // 清除預覽狀態
+        } else {
+          console.warn('⚠️ 未找到合成影片，嘗試重新載入');
+          loadFiles().then(() => {
+            setTimeout(() => {
+              const video = videos.find(v => v.fullPath === outputPath);
+              if (video) {
+                console.log('✅ 第二次嘗試成功，選取影片:', video.name);
+                setCurrentVideo(video);
+                setPreviewClipTime(null);
+              } else {
+                console.error('❌ 無法找到合成影片:', outputPath);
+              }
+            }, 500);
+          });
+        }
+      }, 500);
+      
+    } catch (error) {
+      console.error('❌ 選取合成影片失敗:', error);
+    }
+  };
+
+  // ✅ 當視頻改變時，清除預覽時間點（延遲清除，讓 Player 先應用）
+  useEffect(() => {
+    if (previewClipTime) {
+      const timer = setTimeout(() => {
+        setPreviewClipTime(null);
+      }, 100);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [currentVideo]);
 
   const assetMap = React.useMemo(() => {
     const map: Record<string, VideoAsset> = {};
@@ -154,7 +230,6 @@ const App: React.FC = () => {
             {clips.length} clip{clips.length !== 1 ? 's' : ''}
           </div>
           
-          {/* Download Current Video 按鈕 */}
           <button 
             className={`flex items-center gap-2 px-4 py-1.5 rounded text-sm transition ${
               currentVideo 
@@ -173,31 +248,37 @@ const App: React.FC = () => {
 
       {/* Main Workspace */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Left: Bucket / Library */}
         <VideoLibrary 
           videos={videos} 
-          onSelectVideo={setCurrentVideo} 
+          onSelectVideo={(video) => {
+            setCurrentVideo(video);
+            setPreviewClipTime(null); // 手動選擇視頻時清除預覽
+          }}
           onUpload={handleUpload}
           onDelete={handleDelete}
           isLoading={isLoadingBucket}
           isUploading={isUploading}
         />
 
-        {/* Right: Player & Timeline */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <div className="flex-1 min-h-0 flex flex-col">
+            {/* ✅ 傳遞預覽時間點 */}
             <Player 
               video={currentVideo} 
-              onAddClip={handleAddClip} 
+              onAddClip={handleAddClip}
+              previewTime={previewClipTime}
             />
           </div>
           
+          {/* ✅ 傳遞預覽和合成完成回調 */}
           <Timeline 
             clips={clips} 
             assets={assetMap}
             onRemoveClip={handleRemoveClip}
             onSynthesize={handleSynthesize}
             isSynthesizing={isSynthesizing}
+            onSynthesizeComplete={handleSynthesizeComplete}
+            onPreviewClip={handlePreviewClip}
           />
         </div>
       </div>
