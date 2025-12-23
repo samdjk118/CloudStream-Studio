@@ -1,19 +1,21 @@
+// frontend/src/components/Player.tsx
+
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { VideoAsset, Clip } from '../types';
-import { Play, Pause, Scissors, Gauge, AlertCircle, GripHorizontal } from 'lucide-react';
+import { Play, Pause, Scissors, Gauge, AlertCircle, GripHorizontal, Wifi } from 'lucide-react';
 
 interface PlayerProps {
   video: VideoAsset | null;
   onAddClip: (clip: Clip) => void;
   autoPlay?: boolean;
-  previewTime?: { start: number; end: number } | null;  // ✅ 新增
+  previewTime?: { start: number; end: number } | null;
 }
 
 export const Player: React.FC<PlayerProps> = ({ 
   video, 
   onAddClip, 
   autoPlay = false,
-  previewTime  // ✅ 接收預覽時間點
+  previewTime
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -25,6 +27,11 @@ export const Player: React.FC<PlayerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
+  // ✅ 新增：緩衝狀態追蹤
+  const [bufferProgress, setBufferProgress] = useState(0);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [networkSpeed, setNetworkSpeed] = useState<number | null>(null);
+  
   const [controlsHeight, setControlsHeight] = useState(192);
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartY = useRef(0);
@@ -32,10 +39,6 @@ export const Player: React.FC<PlayerProps> = ({
   
   const [startPoint, setStartPoint] = useState(0);
   const [endPoint, setEndPoint] = useState(0);
-  
-  // ❌ 移除不需要的剪輯狀態
-  // const [isClipping, setIsClipping] = useState(false);
-  // const [clipTaskStatus, setClipTaskStatus] = useState<TaskStatus | null>(null);
   
   const [isDraggingStart, setIsDraggingStart] = useState(false);
   const [isDraggingEnd, setIsDraggingEnd] = useState(false);
@@ -74,10 +77,98 @@ export const Player: React.FC<PlayerProps> = ({
     }
   };
 
+  // ✅ 新增：監控網路速度
+  useEffect(() => {
+    if (!videoRef.current || !video) return;
+
+    const startTime = performance.now();
+    let bytesLoaded = 0;
+
+    const updateNetworkSpeed = () => {
+      if (!videoRef.current) return;
+
+      const video = videoRef.current;
+      
+      // 計算已下載的 bytes
+      if (video.buffered.length > 0) {
+        const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+        const estimatedBytes = bufferedEnd * (video.duration > 0 ? (video.videoWidth * video.videoHeight * 0.5) : 1000000);
+        
+        const elapsedTime = (performance.now() - startTime) / 1000; // 秒
+        
+        if (elapsedTime > 0 && estimatedBytes > bytesLoaded) {
+          bytesLoaded = estimatedBytes;
+          const speed = (bytesLoaded / elapsedTime) / (1024 * 1024); // MB/s
+          setNetworkSpeed(speed);
+          
+          console.log(`📊 網路速度: ${speed.toFixed(2)} MB/s`);
+        }
+      }
+    };
+
+    const intervalId = setInterval(updateNetworkSpeed, 2000);
+    
+    return () => clearInterval(intervalId);
+  }, [video]);
+
+  // ✅ 新增：監控緩衝進度
+  useEffect(() => {
+    if (!videoRef.current) return;
+
+    const video = videoRef.current;
+
+    const handleProgress = () => {
+      if (video.buffered.length > 0 && video.duration > 0) {
+        const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+        const bufferedPercent = (bufferedEnd / video.duration) * 100;
+        
+        setBufferProgress(bufferedPercent);
+        
+        // 記錄緩衝進度
+        if (bufferedPercent < 100) {
+          console.log(`📦 緩衝進度: ${bufferedPercent.toFixed(1)}% (${formatTime(bufferedEnd)} / ${formatTime(video.duration)})`);
+        }
+      }
+    };
+
+    const handleWaiting = () => {
+      console.log('⏳ 緩衝中...');
+      setIsBuffering(true);
+    };
+
+    const handleCanPlayThrough = () => {
+      console.log('✅ 可以流暢播放');
+      setIsBuffering(false);
+    };
+
+    const handleStalled = () => {
+      console.warn('⚠️ 網路停滯');
+      setIsBuffering(true);
+    };
+
+    const handleSuspend = () => {
+      console.log('⏸️ 下載暫停');
+    };
+
+    video.addEventListener('progress', handleProgress);
+    video.addEventListener('waiting', handleWaiting);
+    video.addEventListener('canplaythrough', handleCanPlayThrough);
+    video.addEventListener('stalled', handleStalled);
+    video.addEventListener('suspend', handleSuspend);
+
+    return () => {
+      video.removeEventListener('progress', handleProgress);
+      video.removeEventListener('waiting', handleWaiting);
+      video.removeEventListener('canplaythrough', handleCanPlayThrough);
+      video.removeEventListener('stalled', handleStalled);
+      video.removeEventListener('suspend', handleSuspend);
+    };
+  }, [video]);
+
   // Reset state when video changes
   useEffect(() => {
     if (video) {
-      console.log('Loading video:', video);
+      console.log('🎬 載入影片:', video.name);
       setError(null);
       setIsLoading(true);
       setIsPlaying(false);
@@ -85,29 +176,45 @@ export const Player: React.FC<PlayerProps> = ({
       setStartPoint(0);
       setEndPoint(video.duration || 0);
       setPlaybackRate(1);
+      setBufferProgress(0);
+      setIsBuffering(false);
+      setNetworkSpeed(null);
       
       if (videoRef.current) {
-        videoRef.current.currentTime = 0;
-        videoRef.current.playbackRate = 1;
-        videoRef.current.load();
+        const videoElement = videoRef.current;
+        
+        // ✅ 設定預載策略
+        videoElement.preload = 'auto';  // 自動預載
+        
+        // ✅ 設定更激進的緩衝策略（如果瀏覽器支援）
+        if ('buffered' in videoElement) {
+          console.log('📥 啟用自動預載模式');
+        }
+        
+        videoElement.currentTime = 0;
+        videoElement.playbackRate = 1;
+        videoElement.load();
+        
+        console.log('📊 影片資訊:', {
+          url: video.url,
+          size: video.size ? `${(video.size / 1024 / 1024).toFixed(2)} MB` : '未知',
+          type: video.contentType
+        });
       }
     }
   }, [video]);
 
-  // ✅ 新增：當收到預覽時間點時，自動設置並播放
+  // 當收到預覽時間點時，自動設置並播放
   useEffect(() => {
     if (previewTime && videoRef.current && duration > 0) {
       console.log('🎯 應用預覽時間點:', previewTime);
       
-      // 設置時間範圍
       setStartPoint(previewTime.start);
       setEndPoint(previewTime.end);
       
-      // 跳轉到開始位置
       videoRef.current.currentTime = previewTime.start;
       setCurrentTime(previewTime.start);
       
-      // 自動播放
       videoRef.current.play()
         .then(() => {
           setIsPlaying(true);
@@ -275,12 +382,15 @@ export const Player: React.FC<PlayerProps> = ({
   };
 
   const handleLoadedMetadata = () => {
-    console.log('Video metadata loaded');
+    console.log('📋 影片 metadata 已載入');
     setIsLoading(false);
     
     if (videoRef.current) {
       const dur = roundToPrecision(videoRef.current.duration, 3);
       setDuration(dur);
+      
+      console.log(`⏱️ 影片時長: ${formatTime(dur)}`);
+      
       if (endPoint === 0 || endPoint > dur) {
         setEndPoint(dur);
       }
@@ -294,13 +404,13 @@ export const Player: React.FC<PlayerProps> = ({
   };
 
   const handleCanPlay = () => {
-    console.log('Video can play');
+    console.log('✅ 影片可以播放');
     setIsLoading(false);
     setError(null);
   };
 
   const handleError = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
-    console.error('Video error:', e);
+    console.error('❌ 影片錯誤:', e);
     setIsLoading(false);
     
     const videoElement = e.currentTarget;
@@ -340,7 +450,6 @@ export const Player: React.FC<PlayerProps> = ({
     }
   };
 
-  // ✅ 純前端剪輯記錄（不調用後端）
   const handleCreateClip = () => {
     if (!video) {
       alert('請先選擇影片');
@@ -427,7 +536,7 @@ export const Player: React.FC<PlayerProps> = ({
           }}
           onClick={togglePlay}
           playsInline
-          preload="metadata"
+          preload="auto"  // ✅ 自動預載
           crossOrigin="anonymous"
         >
           <source src={video.url} type="video/mp4" />
@@ -435,11 +544,27 @@ export const Player: React.FC<PlayerProps> = ({
           Your browser does not support the video tag.
         </video>
         
-        {isLoading && (
+        {/* ✅ 載入中 + 緩衝進度 */}
+        {(isLoading || isBuffering) && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/50">
             <div className="flex flex-col items-center gap-3">
               <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-              <p className="text-white text-sm">Loading video...</p>
+              <p className="text-white text-sm">
+                {isLoading ? 'Loading video...' : 'Buffering...'}
+              </p>
+              {bufferProgress > 0 && bufferProgress < 100 && (
+                <div className="w-48 bg-gray-700 rounded-full h-2 overflow-hidden">
+                  <div 
+                    className="bg-blue-500 h-full transition-all duration-300"
+                    style={{ width: `${bufferProgress}%` }}
+                  ></div>
+                </div>
+              )}
+              {bufferProgress > 0 && (
+                <p className="text-xs text-gray-400">
+                  {bufferProgress.toFixed(1)}% buffered
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -484,6 +609,16 @@ export const Player: React.FC<PlayerProps> = ({
             </div>
           </div>
         )}
+
+        {/* ✅ 網路速度指示器 */}
+        {networkSpeed !== null && (
+          <div className="absolute top-4 right-4 bg-black/70 backdrop-blur px-3 py-2 rounded-lg flex items-center gap-2 text-xs">
+            <Wifi className={`w-4 h-4 ${networkSpeed > 1 ? 'text-green-400' : networkSpeed > 0.5 ? 'text-yellow-400' : 'text-red-400'}`} />
+            <span className="text-white font-mono">
+              {networkSpeed.toFixed(2)} MB/s
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Resize Handle */}
@@ -515,109 +650,120 @@ export const Player: React.FC<PlayerProps> = ({
             }
           }}
         >
-            <div className="timeline-track absolute left-0 right-0 h-2 bg-[#333] rounded pointer-events-auto"></div>
+          {/* ✅ 緩衝進度條 */}
+          {bufferProgress > 0 && duration > 0 && (
+            <div 
+              className="absolute h-2 bg-gray-600/50 rounded"
+              style={{
+                left: 0,
+                width: `${bufferProgress}%`
+              }}
+            ></div>
+          )}
 
-            {duration > 0 && (
-              <div 
-                className="absolute h-2 bg-blue-600/60 rounded cursor-pointer pointer-events-auto"
-                style={{
-                  left: `${(startPoint / duration) * 100}%`,
-                  width: `${((endPoint - startPoint) / duration) * 100}%`
-                }}
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  handleTimelineClick(e);
-                }}
-              ></div>
-            )}
+          <div className="timeline-track absolute left-0 right-0 h-2 bg-[#333] rounded pointer-events-auto"></div>
 
-            {duration > 0 && currentTime >= startPoint && currentTime <= endPoint && (
-              <div 
-                className={`absolute w-0.5 h-8 bg-white z-20 cursor-ew-resize group/playhead transition-all ${
-                  isDraggingScrubber ? 'w-1 bg-blue-400' : ''
-                }`}
-                style={{ 
-                  left: `${(currentTime / duration) * 100}%`
-                }}
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  
-                  setDragStartPosition({ x: e.clientX, y: e.clientY });
-                  setIsDraggingScrubber(true);
-                  
-                  if (isPlaying && videoRef.current) {
-                    videoRef.current.pause();
-                    setIsPlaying(false);
-                  }
-                }}
-              >
-                <div className={`absolute -top-1 -left-1.5 w-3 h-3 bg-white rotate-45 cursor-ew-resize hover:scale-125 transition-all ${
-                  isDraggingScrubber ? 'scale-150 bg-blue-400' : ''
-                }`}></div>
+          {duration > 0 && (
+            <div 
+              className="absolute h-2 bg-blue-600/60 rounded cursor-pointer pointer-events-auto"
+              style={{
+                left: `${(startPoint / duration) * 100}%`,
+                width: `${((endPoint - startPoint) / duration) * 100}%`
+              }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                handleTimelineClick(e);
+              }}
+            ></div>
+          )}
+
+          {duration > 0 && currentTime >= startPoint && currentTime <= endPoint && (
+            <div 
+              className={`absolute w-0.5 h-8 bg-white z-20 cursor-ew-resize group/playhead transition-all ${
+                isDraggingScrubber ? 'w-1 bg-blue-400' : ''
+              }`}
+              style={{ 
+                left: `${(currentTime / duration) * 100}%`
+              }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
                 
-                <div className={`absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] px-2 py-1 rounded whitespace-nowrap pointer-events-none transition-all ${
-                  isDraggingScrubber 
-                    ? 'bg-blue-500 text-white opacity-100 scale-110' 
-                    : 'bg-white/90 text-black opacity-0 group-hover/playhead:opacity-100'
-                }`}>
-                  {formatTime(currentTime)}
-                </div>
+                setDragStartPosition({ x: e.clientX, y: e.clientY });
+                setIsDraggingScrubber(true);
                 
-                <div className="absolute -left-3 -right-3 -top-2 -bottom-2 cursor-ew-resize"></div>
+                if (isPlaying && videoRef.current) {
+                  videoRef.current.pause();
+                  setIsPlaying(false);
+                }
+              }}
+            >
+              <div className={`absolute -top-1 -left-1.5 w-3 h-3 bg-white rotate-45 cursor-ew-resize hover:scale-125 transition-all ${
+                isDraggingScrubber ? 'scale-150 bg-blue-400' : ''
+              }`}></div>
+              
+              <div className={`absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] px-2 py-1 rounded whitespace-nowrap pointer-events-none transition-all ${
+                isDraggingScrubber 
+                  ? 'bg-blue-500 text-white opacity-100 scale-110' 
+                  : 'bg-white/90 text-black opacity-0 group-hover/playhead:opacity-100'
+              }`}>
+                {formatTime(currentTime)}
               </div>
-            )}
+              
+              <div className="absolute -left-3 -right-3 -top-2 -bottom-2 cursor-ew-resize"></div>
+            </div>
+          )}
 
-            {duration > 0 && (
-              <div 
-                className="absolute w-4 h-8 bg-blue-500 rounded-l cursor-ew-resize z-30 flex items-center justify-center group hover:bg-blue-400 active:bg-blue-600 transition-colors"
-                style={{ 
-                  left: `${(startPoint / duration) * 100}%`,
-                  transform: 'translateX(-50%)'
-                }}
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  
-                  setDragStartPosition({ x: e.clientX, y: e.clientY });
-                  setIsDraggingStart(true);
-                  
-                  if (isPlaying && videoRef.current) {
-                    videoRef.current.pause();
-                    setIsPlaying(false);
-                  }
-                }}
-              >
-                <div className="w-0.5 h-4 bg-white/50"></div>
-                <div className="absolute -top-8 bg-blue-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none shadow-lg">
-                  Start: {formatTime(startPoint)} • Click to jump
-                </div>
+          {duration > 0 && (
+            <div 
+              className="absolute w-4 h-8 bg-blue-500 rounded-l cursor-ew-resize z-30 flex items-center justify-center group hover:bg-blue-400 active:bg-blue-600 transition-colors"
+              style={{ 
+                left: `${(startPoint / duration) * 100}%`,
+                transform: 'translateX(-50%)'
+              }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                
+                setDragStartPosition({ x: e.clientX, y: e.clientY });
+                setIsDraggingStart(true);
+                
+                if (isPlaying && videoRef.current) {
+                  videoRef.current.pause();
+                  setIsPlaying(false);
+                }
+              }}
+            >
+              <div className="w-0.5 h-4 bg-white/50"></div>
+              <div className="absolute -top-8 bg-blue-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none shadow-lg">
+                Start: {formatTime(startPoint)} • Click to jump
               </div>
-            )}
+            </div>
+          )}
 
-            {duration > 0 && (
-              <div 
-                className="absolute w-4 h-8 bg-blue-500 rounded-r cursor-ew-resize z-30 flex items-center justify-center group hover:bg-blue-400 active:bg-blue-600 transition-colors"
-                style={{ 
-                  left: `${(endPoint / duration) * 100}%`,
-                  transform: 'translateX(-50%)'
-                }}
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  setIsDraggingEnd(true);
-                  if (isPlaying && videoRef.current) {
-                    videoRef.current.pause();
-                    setIsPlaying(false);
-                  }
-                }}
-              >
-                <div className="w-0.5 h-4 bg-white/50"></div>
-                <div className="absolute -top-8 bg-blue-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none shadow-lg">
-                  End: {formatTime(endPoint)}
-                </div>
+          {duration > 0 && (
+            <div 
+              className="absolute w-4 h-8 bg-blue-500 rounded-r cursor-ew-resize z-30 flex items-center justify-center group hover:bg-blue-400 active:bg-blue-600 transition-colors"
+              style={{ 
+                left: `${(endPoint / duration) * 100}%`,
+                transform: 'translateX(-50%)'
+              }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                setIsDraggingEnd(true);
+                if (isPlaying && videoRef.current) {
+                  videoRef.current.pause();
+                  setIsPlaying(false);
+                }
+              }}
+            >
+              <div className="w-0.5 h-4 bg-white/50"></div>
+              <div className="absolute -top-8 bg-blue-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none shadow-lg">
+                End: {formatTime(endPoint)}
               </div>
-            )}
+            </div>
+          )}
         </div>
 
         {/* Precision Controls */}
@@ -635,6 +781,13 @@ export const Player: React.FC<PlayerProps> = ({
               <div className="text-sm font-mono text-gray-400 shrink-0">
                 {formatTime(currentTime)} <span className="text-gray-600">/</span> {formatTime(duration)}
               </div>
+
+              {/* ✅ 緩衝狀態指示 */}
+              {bufferProgress > 0 && bufferProgress < 100 && (
+                <div className="text-xs text-gray-500 shrink-0">
+                  ({bufferProgress.toFixed(0)}% buffered)
+                </div>
+              )}
             </div>
 
             <div className="flex gap-4 items-center ml-14">

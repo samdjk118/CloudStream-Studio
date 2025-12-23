@@ -236,138 +236,142 @@ async def process_merge_task(task_id: str, request: MergeRequest):
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-
-# ==================== HLS 轉換 ====================
-@router.post("/hls", response_model=TaskResponse)
-async def convert_to_hls(request: HLSConversionRequest, background_tasks: BackgroundTasks):
+@router.post("/optimize/{video_path:path}")
+async def optimize_video(video_path: str, background_tasks: BackgroundTasks):
     """
-    將影片轉換為 HLS 格式
+    最佳化影片（Fast Start）
     
-    - 支持多畫質轉換
-    - 自動生成 master playlist
-    - 生成預覽縮圖
+    將 moov atom 移到檔案開頭，加速串流載入
+    
+    Args:
+        video_path: GCS 中的影片路徑
+    
+    Returns:
+        TaskResponse: 任務資訊
+    
+    Example:
+        ```bash
+        curl -X POST http://localhost:8000/api/videos/optimize/uuid/video.mp4/timestamp/sample.mp4
+        ```
     """
-    task_id = task_manager.create_task("HLS conversion task created")
-    
-    background_tasks.add_task(
-        process_hls_task,
-        task_id,
-        request
-    )
-    
-    return TaskResponse(
-        task_id=task_id,
-        message="HLS conversion started",
-        status_url=f"/api/tasks/{task_id}"
-    )
+    try:
+        if not gcs_service.file_exists(video_path):
+            raise HTTPException(status_code=404, detail="影片不存在")
+        
+        logger.info(f"🔧 最佳化影片: {video_path}")
+        
+        # 創建任務
+        task_id = task_manager.create_task(f"最佳化: {os.path.basename(video_path)}")
+        
+        # 在背景執行
+        background_tasks.add_task(
+            process_optimize_task,
+            task_id,
+            video_path
+        )
+        
+        return TaskResponse(
+            task_id=task_id,
+            message="最佳化任務已啟動",
+            status_url=f"/api/tasks/{task_id}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 創建最佳化任務失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"創建任務失敗: {str(e)}")
 
 
-async def process_hls_task(task_id: str, request: HLSConversionRequest):
-    """執行 HLS 轉換任務"""
-    temp_dir = tempfile.mkdtemp(prefix="hls_")
-    
+async def process_optimize_task(task_id: str, video_path: str):
+    """執行最佳化任務"""
+    temp_dir = None
     try:
         task_manager.update_task(
             task_id,
             status="processing",
             progress=0.1,
-            message="Downloading video..."
+            message="下載影片..."
         )
         
-        logger.info(f"📺 [Task {task_id}] 開始 HLS 轉換: {request.video_path}")
+        logger.info(f"🔧 [Task {task_id}] 開始最佳化")
         
-        # 1. 下載原始影片
+        temp_dir = tempfile.mkdtemp(prefix="optimize_")
         local_input = os.path.join(temp_dir, "input.mp4")
-        gcs_service.download_file(request.video_path, local_input)
+        local_output = os.path.join(temp_dir, "output.mp4")
         
-        # 獲取影片信息
-        video_info = ffmpeg_service.get_video_info(local_input)
-        logger.info(f"   影片信息: {video_info['duration']:.2f}s, {video_info['width']}x{video_info['height']}")
+        # 下載影片
+        gcs_service.download_file(video_path, local_input)
         
-        task_manager.update_task(task_id, progress=0.2, message="Converting to HLS...")
-        
-        # 2. 轉換為 HLS
-        hls_output_dir = os.path.join(temp_dir, "hls")
-        
-        # 根據請求選擇變體
-        variants = settings.HLS_VARIANTS
-        if request.variants:
-            variants = [v for v in variants if v['name'] in request.variants]
-        
-        logger.info(f"   轉換畫質: {[v['name'] for v in variants]}")
-        
-        master_playlist = hls_service.convert_to_hls(
-            local_input,
-            hls_output_dir,
-            variants
+        task_manager.update_task(
+            task_id,
+            progress=0.3,
+            message="執行 Fast Start 最佳化..."
         )
         
-        task_manager.update_task(task_id, progress=0.7, message="Uploading HLS files...")
+        # 使用 ffmpeg 進行 Fast Start 最佳化
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-i', local_input,
+            '-c', 'copy',  # 不重新編碼
+            '-movflags', '+faststart',  # Fast Start
+            '-y',
+            local_output
+        ]
         
-        # 3. 上傳所有 HLS 檔案到 GCS
-        video_name = os.path.splitext(os.path.basename(request.video_path))[0]
-        gcs_hls_dir = f"hls/{video_name}"
+        logger.info(f"   執行: {' '.join(ffmpeg_cmd)}")
         
-        logger.info(f"📤 [Task {task_id}] 上傳 HLS 文件到: {gcs_hls_dir}")
-        
-        # 上傳所有檔案
-        file_count = 0
-        for root, dirs, files in os.walk(hls_output_dir):
-            for file in files:
-                local_file = os.path.join(root, file)
-                relative_path = os.path.relpath(local_file, hls_output_dir)
-                gcs_path = f"{gcs_hls_dir}/{relative_path}"
-                
-                gcs_service.upload_file(local_file, gcs_path)
-                file_count += 1
-        
-        logger.info(f"   ✅ 已上傳 {file_count} 個文件")
-        
-        # 4. 生成預覽縮圖
-        task_manager.update_task(task_id, progress=0.9, message="Generating thumbnails...")
-        
-        thumbnails_dir = os.path.join(temp_dir, "thumbnails")
-        thumbnails = hls_service.generate_preview_thumbnails(
-            local_input,
-            thumbnails_dir,
-            interval=10
+        process = subprocess.run(
+            ffmpeg_cmd,
+            capture_output=True,
+            text=True,
+            timeout=300
         )
         
-        # 上傳縮圖
-        for i, thumb in enumerate(thumbnails):
-            gcs_thumb_path = f"{gcs_hls_dir}/thumbnails/thumb_{i:04d}.jpg"
-            gcs_service.upload_file(thumb, gcs_thumb_path)
+        if process.returncode != 0:
+            raise Exception(f"FFmpeg 失敗: {process.stderr}")
         
-        logger.info(f"   ✅ 已生成 {len(thumbnails)} 個縮圖")
+        task_manager.update_task(
+            task_id,
+            progress=0.7,
+            message="上傳最佳化版本..."
+        )
         
-        # 完成
-        master_url = gcs_service.get_public_url(f"{gcs_hls_dir}/master.m3u8")
+        # 上傳回 GCS（覆蓋原檔案）
+        gcs_service.upload_file(local_output, video_path)
+        
+        # 獲取檔案資訊
+        optimized_info = ffmpeg_service.get_video_info(local_output)
         
         task_manager.update_task(
             task_id,
             status="completed",
             progress=1.0,
-            message="HLS conversion completed",
-            output_url=master_url,
-            output_path=gcs_hls_dir,
+            message="最佳化完成",
+            output_path=video_path,
             metadata={
-                "variants": [v['name'] for v in variants],
-                "file_count": file_count,
-                "thumbnail_count": len(thumbnails),
-                "video_info": video_info
+                "optimized": True,
+                "file_size": os.path.getsize(local_output),
+                "duration": optimized_info['duration'],
+                "video_info": {
+                    "width": optimized_info['width'],
+                    "height": optimized_info['height'],
+                    "codec": optimized_info['codec'],
+                    "fps": optimized_info['fps']
+                }
             }
         )
         
-        logger.info(f"✅ [Task {task_id}] HLS 轉換完成: {master_url}")
+        logger.info(f"✅ [Task {task_id}] 最佳化完成")
         
     except Exception as e:
-        logger.error(f"❌ [Task {task_id}] HLS 轉換失敗: {e}", exc_info=True)
+        logger.error(f"❌ [Task {task_id}] 最佳化失敗: {e}", exc_info=True)
         task_manager.update_task(
             task_id,
             status="failed",
             error=str(e),
-            message=f"HLS conversion failed: {str(e)}"
+            message=f"最佳化失敗: {str(e)}"
         )
-    
     finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
