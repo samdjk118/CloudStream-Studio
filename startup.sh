@@ -34,7 +34,7 @@ echo "✓ Credentials found"
 cat > /app/backend/.env << EOF
 GCP_PROJECT_ID=$GCP_PROJECT_ID
 GCS_BUCKET_NAME=$GCS_BUCKET_NAME
-ALLOWED_ORIGINS=*
+ALLOWED_ORIGINS=["*"]
 EOF
 
 echo "✓ Backend .env created"
