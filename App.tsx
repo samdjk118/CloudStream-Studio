@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { VideoLibrary } from './components/VideoLibrary';
 import { Player } from './components/Player';
 import { Timeline } from './components/Timeline';
@@ -13,11 +13,17 @@ const App: React.FC = () => {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [isLoadingBucket, setIsLoadingBucket] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
-  
-  // ✅ 新增：預覽時間點
   const [previewClipTime, setPreviewClipTime] = useState<{ start: number; end: number } | null>(null);
+  
+  // ✅ 使用 ref 追蹤最新的 videos
+  const videosRef = useRef<VideoAsset[]>([]);
+  
+  // ✅ 同步 ref
+  useEffect(() => {
+    videosRef.current = videos;
+  }, [videos]);
 
-  const convertToVideoAsset = (file: GCSFile, index: number): VideoAsset => {
+  const convertToVideoAsset = useCallback((file: GCSFile, index: number): VideoAsset => {
     const displayName = file.name.split('/').pop() || file.name;
     const streamUrl = getStreamUrl(file.name);
     
@@ -32,9 +38,9 @@ const App: React.FC = () => {
       contentType: file.content_type,
       thumbnail: undefined
     };
-  };
+  }, []);
 
-  const loadFiles = async () => {
+  const loadFiles = useCallback(async () => {
     setIsLoadingBucket(true);
     try {
       const files = await fetchFiles();
@@ -48,19 +54,22 @@ const App: React.FC = () => {
       );
       
       setVideos(assets);
+      return assets; // ✅ 返回新的 assets
     } catch (err) {
       console.error("Failed to load files", err);
       setVideos([]);
+      return [];
     } finally {
       setIsLoadingBucket(false);
     }
-  };
+  }, [convertToVideoAsset]);
 
+  // ✅ 初始載入
   useEffect(() => {
     loadFiles();
-  }, []);
+  }, [loadFiles]);
 
-  const handleUpload = async (file: File) => {
+  const handleUpload = useCallback(async (file: File) => {
     setIsUploading(true);
     try {
       await uploadFile(file);
@@ -72,9 +81,9 @@ const App: React.FC = () => {
     } finally {
       setIsUploading(false);
     }
-  };
+  }, [loadFiles]);
 
-  const handleDelete = async (video: VideoAsset) => {
+  const handleDelete = useCallback(async (video: VideoAsset) => {
     try {
       const pathToDelete = (video as any).fullPath || video.name;
       await deleteFile(pathToDelete);
@@ -91,9 +100,9 @@ const App: React.FC = () => {
       alert("Delete failed.");
       console.error(err);
     }
-  };
+  }, [currentVideo, loadFiles]);
 
-  const handleDownloadVideo = async () => {
+  const handleDownloadVideo = useCallback(async () => {
     if (!currentVideo) {
       alert('Please select a video first!');
       return;
@@ -113,23 +122,22 @@ const App: React.FC = () => {
       console.error('Download failed:', err);
       alert('Download failed. Please try again.');
     }
-  };
+  }, [currentVideo]);
 
-  const handleAddClip = (clip: Clip) => {
+  const handleAddClip = useCallback((clip: Clip) => {
     setClips(prev => [...prev, clip]);
-  };
+  }, []);
 
-  const handleRemoveClip = (clipId: string) => {
+  const handleRemoveClip = useCallback((clipId: string) => {
     setClips(prev => prev.filter(c => c.id !== clipId));
-  };
+  }, []);
 
-  const handleSynthesize = () => {
+  const handleSynthesize = useCallback(() => {
     console.log('Synthesize triggered from App (deprecated)');
-  };
+  }, []);
 
-  // ✅ 新增：處理片段預覽
-  const handlePreviewClip = (clip: Clip) => {
-    const asset = videos.find(v => v.id === clip.sourceVideoId);
+  const handlePreviewClip = useCallback((clip: Clip) => {
+    const asset = videosRef.current.find(v => v.id === clip.sourceVideoId);
     
     if (!asset) {
       console.warn('找不到源視頻:', clip.sourceVideoId);
@@ -142,55 +150,56 @@ const App: React.FC = () => {
       end: clip.endTime
     });
 
-    // 切換到源視頻
     setCurrentVideo(asset);
-    
-    // 設置預覽時間點
     setPreviewClipTime({
       start: clip.startTime,
       end: clip.endTime
     });
-  };
+  }, []);
 
-  // ✅ 新增：處理合成完成
-  const handleSynthesizeComplete = async (outputPath: string) => {
+  // ✅ 修復 handleSynthesizeComplete - 避免閉包問題
+  const handleSynthesizeComplete = useCallback(async (outputPath: string) => {
     console.log('🎬 合成完成，準備選取新影片:', outputPath);
     
     try {
-      // 重新載入文件列表
-      await loadFiles();
+      // ✅ 重新載入並獲取新的 videos
+      const newVideos = await loadFiles();
       
-      // 延遲一下確保文件列表更新
-      setTimeout(() => {
-        const synthesizedVideo = videos.find(v => v.fullPath === outputPath);
+      // ✅ 使用返回的新 videos 而不是 state
+      const findVideo = (videoList: VideoAsset[]) => 
+        videoList.find(v => v.fullPath === outputPath);
+      
+      let synthesizedVideo = findVideo(newVideos);
+      
+      if (synthesizedVideo) {
+        console.log('✅ 找到合成影片，自動選取:', synthesizedVideo.name);
+        setCurrentVideo(synthesizedVideo);
+        setPreviewClipTime(null);
+      } else {
+        console.warn('⚠️ 未找到合成影片，嘗試重新載入');
+        
+        // ✅ 延遲後再次嘗試
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const retryVideos = await loadFiles();
+        synthesizedVideo = findVideo(retryVideos);
         
         if (synthesizedVideo) {
-          console.log('✅ 找到合成影片，自動選取:', synthesizedVideo.name);
+          console.log('✅ 第二次嘗試成功，選取影片:', synthesizedVideo.name);
           setCurrentVideo(synthesizedVideo);
-          setPreviewClipTime(null); // 清除預覽狀態
+          setPreviewClipTime(null);
         } else {
-          console.warn('⚠️ 未找到合成影片，嘗試重新載入');
-          loadFiles().then(() => {
-            setTimeout(() => {
-              const video = videos.find(v => v.fullPath === outputPath);
-              if (video) {
-                console.log('✅ 第二次嘗試成功，選取影片:', video.name);
-                setCurrentVideo(video);
-                setPreviewClipTime(null);
-              } else {
-                console.error('❌ 無法找到合成影片:', outputPath);
-              }
-            }, 500);
-          });
+          console.error('❌ 無法找到合成影片:', outputPath);
+          alert('合成完成，但無法自動選取影片。請手動從列表中選擇。');
         }
-      }, 500);
+      }
       
     } catch (error) {
       console.error('❌ 選取合成影片失敗:', error);
+      alert('選取合成影片失敗，請手動從列表中選擇。');
     }
-  };
+  }, [loadFiles]);
 
-  // ✅ 當視頻改變時，清除預覽時間點（延遲清除，讓 Player 先應用）
+  // ✅ 修復 useEffect - 完整的依賴項
   useEffect(() => {
     if (previewClipTime) {
       const timer = setTimeout(() => {
@@ -199,13 +208,22 @@ const App: React.FC = () => {
       
       return () => clearTimeout(timer);
     }
-  }, [currentVideo]);
+  }, [currentVideo, previewClipTime]); // ✅ 添加 previewClipTime
 
-  const assetMap = React.useMemo(() => {
+  // ✅ 優化 assetMap
+  const assetMap = useMemo(() => {
     const map: Record<string, VideoAsset> = {};
-    videos.forEach(v => map[v.id] = v);
+    videos.forEach(v => {
+      map[v.id] = v;
+    });
     return map;
   }, [videos]);
+
+  // ✅ 優化 handleSelectVideo
+  const handleSelectVideo = useCallback((video: VideoAsset) => {
+    setCurrentVideo(video);
+    setPreviewClipTime(null);
+  }, []);
 
   return (
     <div className="flex flex-col h-screen bg-[#0f0f0f] text-white overflow-hidden">
@@ -250,10 +268,7 @@ const App: React.FC = () => {
       <div className="flex-1 flex overflow-hidden min-h-0">
         <VideoLibrary 
           videos={videos} 
-          onSelectVideo={(video) => {
-            setCurrentVideo(video);
-            setPreviewClipTime(null); // 手動選擇視頻時清除預覽
-          }}
+          onSelectVideo={handleSelectVideo}
           onUpload={handleUpload}
           onDelete={handleDelete}
           isLoading={isLoadingBucket}
@@ -262,7 +277,6 @@ const App: React.FC = () => {
 
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <div className="flex-1 min-h-0 flex flex-col">
-            {/* ✅ 傳遞預覽時間點 */}
             <Player 
               video={currentVideo} 
               onAddClip={handleAddClip}
@@ -270,7 +284,6 @@ const App: React.FC = () => {
             />
           </div>
           
-          {/* ✅ 傳遞預覽和合成完成回調 */}
           <Timeline 
             clips={clips} 
             assets={assetMap}

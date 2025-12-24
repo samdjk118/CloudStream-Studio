@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Clip, VideoAsset } from '../types';
 import { Trash2, Play, Film, Sparkles, GripHorizontal, Eye } from 'lucide-react';
 import { mergeVideos, pollTaskStatus, TaskStatus } from '../services/api';
@@ -27,23 +27,25 @@ export const Timeline: React.FC<TimelineProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartY = useRef(0);
   const resizeStartHeight = useRef(0);
+  const lastSavedHeight = useRef(240); // ✅ 追蹤上次儲存的高度
 
   // 合併任務狀態
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [synthesizeTaskStatus, setSynthesizeTaskStatus] = useState<TaskStatus | null>(null);
 
-  // 處理拖曳調整高度
-  const handleResizeStart = (e: React.MouseEvent) => {
+  // ✅ 處理拖曳調整高度
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizing(true);
     resizeStartY.current = e.clientY;
     resizeStartHeight.current = timelineHeight;
-  };
+  }, [timelineHeight]);
 
+  // ✅ 拖曳 effect
   useEffect(() => {
+    if (!isResizing) return;
+
     const handleResizeMove = (e: MouseEvent) => {
-      if (!isResizing) return;
-      
       const deltaY = resizeStartY.current - e.clientY;
       const newHeight = Math.max(150, Math.min(500, resizeStartHeight.current + deltaY));
       setTimelineHeight(newHeight);
@@ -53,42 +55,45 @@ export const Timeline: React.FC<TimelineProps> = ({
       setIsResizing(false);
     };
 
-    if (isResizing) {
-      document.addEventListener('mousemove', handleResizeMove);
-      document.addEventListener('mouseup', handleResizeEnd);
-      
-      return () => {
-        document.removeEventListener('mousemove', handleResizeMove);
-        document.removeEventListener('mouseup', handleResizeEnd);
-      };
-    }
+    document.addEventListener('mousemove', handleResizeMove);
+    document.addEventListener('mouseup', handleResizeEnd);
+    
+    return () => {
+      document.removeEventListener('mousemove', handleResizeMove);
+      document.removeEventListener('mouseup', handleResizeEnd);
+    };
   }, [isResizing]);
 
-  // 載入/儲存高度偏好
+  // ✅ 載入高度偏好 - 只在 mount 時執行一次
   useEffect(() => {
     const savedHeight = localStorage.getItem('timelineHeight');
     if (savedHeight) {
-      setTimelineHeight(parseInt(savedHeight));
+      const height = parseInt(savedHeight);
+      setTimelineHeight(height);
+      lastSavedHeight.current = height;
     }
-  }, []);
+  }, []); // ✅ 空依賴，只執行一次
 
+  // ✅ 儲存高度偏好 - 優化版本
   useEffect(() => {
-    if (!isResizing) {
+    // 只有在不拖曳且高度真的改變時才儲存
+    if (!isResizing && Math.abs(timelineHeight - lastSavedHeight.current) > 1) {
       localStorage.setItem('timelineHeight', timelineHeight.toString());
+      lastSavedHeight.current = timelineHeight;
     }
   }, [timelineHeight, isResizing]);
 
-  const formatTime = (seconds: number) => {
+  const formatTime = useCallback((seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     const ms = Math.round((seconds % 1) * 1000);
     return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
-  };
+  }, []);
 
   const totalDuration = clips.reduce((sum, clip) => sum + (clip.endTime - clip.startTime), 0);
 
-  // ✅ 合成視頻並調用後端 API
-  const handleSynthesize = async () => {
+  // ✅ 合成視頻 - 修復清空片段的邏輯
+  const handleSynthesize = useCallback(async () => {
     if (clips.length === 0) {
       alert('沒有片段可以合成');
       return;
@@ -141,14 +146,24 @@ export const Timeline: React.FC<TimelineProps> = ({
               `精度: ${metadata?.precision_level}\n\n` +
               `正在載入合成影片...`);
 
-        // ✅ 清空所有片段
+        // ✅ 清空所有片段 - 使用 batch 操作
         console.log('🗑️ 清空時間軸片段');
-        clips.forEach(clip => onRemoveClip(clip.id));
+        
+        // ✅ 方法 1: 收集所有 ID 後一次性處理
+        const clipIds = clips.map(clip => clip.id);
+        
+        // 延遲執行，避免在渲染過程中修改 state
+        setTimeout(() => {
+          clipIds.forEach(id => onRemoveClip(id));
+        }, 0);
 
         // ✅ 通知父組件選取新影片
         if (finalStatus.output_path && onSynthesizeComplete) {
           console.log('📹 選取合成影片:', finalStatus.output_path);
-          onSynthesizeComplete(finalStatus.output_path);
+          // 延遲執行，確保片段已清空
+          setTimeout(() => {
+            onSynthesizeComplete(finalStatus.output_path);
+          }, 100);
         }
 
         // 可選：延遲打開結果
@@ -169,7 +184,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       setIsSynthesizing(false);
       setSynthesizeTaskStatus(null);
     }
-  };
+  }, [clips, assets, onRemoveClip, onSynthesizeComplete]);
 
   return (
     <div 

@@ -1,5 +1,3 @@
-// frontend/src/components/Player.tsx
-
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { VideoAsset, Clip } from '../types';
 import { Play, Pause, Scissors, Gauge, AlertCircle, GripHorizontal, Wifi } from 'lucide-react';
@@ -21,11 +19,12 @@ export const Player: React.FC<PlayerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const scrubberRef = useRef<HTMLDivElement>(null);
   
-  // ✅ Refs to prevent loops
   const isUpdatingTimeRef = useRef(false);
   const lastUpdateTimeRef = useRef(0);
   const lastBufferUpdate = useRef(0);
   const lastNetworkUpdate = useRef(0);
+  const currentTimeRef = useRef(0);
+  const lastSetTimeRef = useRef(0); // ✅ 新增：追蹤最後一次設置的時間
   
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -83,7 +82,7 @@ export const Player: React.FC<PlayerProps> = ({
     }
   }, [roundToPrecision]);
 
-  // ✅ 監控網路速度 - 優化版本
+  // ✅ 監控網路速度
   useEffect(() => {
     if (!videoRef.current || !video) return;
 
@@ -94,7 +93,6 @@ export const Player: React.FC<PlayerProps> = ({
     const updateNetworkSpeed = () => {
       if (!isMounted || !videoRef.current) return;
 
-      // ✅ 限制更新頻率
       const now = Date.now();
       if (now - lastNetworkUpdate.current < 2000) return;
       lastNetworkUpdate.current = now;
@@ -115,7 +113,7 @@ export const Player: React.FC<PlayerProps> = ({
       }
     };
 
-    const intervalId = setInterval(updateNetworkSpeed, 3000); // ✅ 降低頻率
+    const intervalId = setInterval(updateNetworkSpeed, 3000);
     
     return () => {
       isMounted = false;
@@ -123,7 +121,7 @@ export const Player: React.FC<PlayerProps> = ({
     };
   }, [video]);
 
-  // ✅ 監控緩衝進度 - 優化版本
+  // ✅ 監控緩衝進度
   useEffect(() => {
     if (!videoRef.current) return;
 
@@ -133,7 +131,6 @@ export const Player: React.FC<PlayerProps> = ({
     const handleProgress = () => {
       if (!isMounted || video.buffered.length === 0 || video.duration === 0) return;
       
-      // ✅ 限制更新頻率
       const now = Date.now();
       if (now - lastBufferUpdate.current < 500) return;
       lastBufferUpdate.current = now;
@@ -168,7 +165,7 @@ export const Player: React.FC<PlayerProps> = ({
       video.removeEventListener('canplaythrough', handleCanPlayThrough);
       video.removeEventListener('stalled', handleStalled);
     };
-  }, []); // ✅ 空依賴，只在 mount 時設置
+  }, []);
 
   // ✅ Reset state when video changes
   useEffect(() => {
@@ -176,7 +173,6 @@ export const Player: React.FC<PlayerProps> = ({
     
     console.log('🎬 載入影片:', video.name);
     
-    // ✅ 重置所有狀態
     setError(null);
     setIsLoading(true);
     setIsPlaying(false);
@@ -188,10 +184,11 @@ export const Player: React.FC<PlayerProps> = ({
     setIsBuffering(false);
     setNetworkSpeed(null);
     
-    // ✅ 重置 refs
     lastUpdateTimeRef.current = 0;
     lastBufferUpdate.current = 0;
     lastNetworkUpdate.current = 0;
+    currentTimeRef.current = 0;
+    lastSetTimeRef.current = 0; // ✅ 重置
     
     if (videoRef.current) {
       const videoElement = videoRef.current;
@@ -212,6 +209,7 @@ export const Player: React.FC<PlayerProps> = ({
     setEndPoint(previewTime.end);
     
     videoRef.current.currentTime = previewTime.start;
+    lastSetTimeRef.current = previewTime.start; // ✅ 記錄設置的時間
     
     const playTimeout = setTimeout(() => {
       if (videoRef.current) {
@@ -224,17 +222,45 @@ export const Player: React.FC<PlayerProps> = ({
     return () => clearTimeout(playTimeout);
   }, [previewTime, duration]);
 
-  // ✅ 當 startPoint 改變時 - 不更新 state
+  // ✅ 修復 Effect 5 - 當 startPoint 改變時
   useEffect(() => {
-    if (!videoRef.current || isDraggingStart || isDraggingEnd || isDraggingScrubber) return;
+    // ✅ 如果正在拖曳，完全跳過
+    if (isDraggingStart || isDraggingEnd || isDraggingScrubber) {
+      console.log('⏩ [Effect 5] 跳過執行 (正在拖曳)');
+      return;
+    }
+
+    if (!videoRef.current) return;
     
+    // ✅ 限制執行頻率
     const now = Date.now();
-    if (now - lastUpdateTimeRef.current < 100) return;
+    if (now - lastUpdateTimeRef.current < 100) {
+      console.log('⏩ [Effect 5] 跳過執行 (更新太頻繁)');
+      return;
+    }
     lastUpdateTimeRef.current = now;
     
-    if (Math.abs(videoRef.current.currentTime - startPoint) > 0.01) {
+    const currentVideoTime = videoRef.current.currentTime;
+    
+    // ✅ 檢查是否是我們自己剛設置的時間
+    if (Math.abs(currentVideoTime - lastSetTimeRef.current) < 0.05) {
+      console.log('⏩ [Effect 5] 跳過執行 (時間剛被設置)');
+      return;
+    }
+    
+    // ✅ 增加容差到 0.1 秒
+    if (Math.abs(currentVideoTime - startPoint) > 0.1) {
+      console.log('⏩ [Effect 5] 執行跳轉:', {
+        from: currentVideoTime,
+        to: startPoint,
+        diff: Math.abs(currentVideoTime - startPoint)
+      });
+      
       videoRef.current.currentTime = startPoint;
-      // ✅ 不調用 setCurrentTime，讓 timeupdate 事件自然觸發
+      currentTimeRef.current = startPoint;
+      lastSetTimeRef.current = startPoint; // ✅ 記錄設置的時間
+    } else {
+      console.log('⏩ [Effect 5] 時間已同步，不需要跳轉');
     }
   }, [startPoint, isDraggingStart, isDraggingEnd, isDraggingScrubber]);
 
@@ -250,11 +276,15 @@ export const Player: React.FC<PlayerProps> = ({
       if (current >= endPoint) {
         videoRef.current.pause();
         videoRef.current.currentTime = startPoint;
+        currentTimeRef.current = startPoint;
+        lastSetTimeRef.current = startPoint; // ✅ 記錄
         setIsPlaying(false);
       }
       
       if (current < startPoint) {
         videoRef.current.currentTime = startPoint;
+        currentTimeRef.current = startPoint;
+        lastSetTimeRef.current = startPoint; // ✅ 記錄
       }
     };
 
@@ -296,10 +326,22 @@ export const Player: React.FC<PlayerProps> = ({
   useEffect(() => {
     if (!isDraggingStart && !isDraggingEnd && !isDraggingScrubber) return;
 
+    console.log('🎯 [拖曳] 開始拖曳:', {
+      isDraggingStart,
+      isDraggingEnd,
+      isDraggingScrubber
+    });
+
     let animationFrameId: number;
+    let lastDragUpdate = 0;
 
     const handleMarkerDrag = (e: MouseEvent) => {
       if (!scrubberRef.current) return;
+      
+      // ✅ 限制更新頻率
+      const now = Date.now();
+      if (now - lastDragUpdate < 16) return; // 60fps
+      lastDragUpdate = now;
       
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
@@ -318,6 +360,8 @@ export const Player: React.FC<PlayerProps> = ({
           setStartPoint(roundToPrecision(newStart, 3));
           if (videoRef.current) {
             videoRef.current.currentTime = newStart;
+            currentTimeRef.current = newStart;
+            lastSetTimeRef.current = newStart; // ✅ 記錄
           }
         } else if (isDraggingEnd) {
           const newEnd = Math.max(newTime, startPoint + 0.001);
@@ -326,12 +370,16 @@ export const Player: React.FC<PlayerProps> = ({
           const clampedTime = Math.max(startPoint, Math.min(newTime, endPoint));
           if (videoRef.current) {
             videoRef.current.currentTime = clampedTime;
+            currentTimeRef.current = clampedTime;
+            lastSetTimeRef.current = clampedTime; // ✅ 記錄
           }
         }
       });
     };
 
     const handleMarkerDragEnd = () => {
+      console.log('🎯 [拖曳] 結束拖曳');
+      
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
       }
@@ -364,6 +412,8 @@ export const Player: React.FC<PlayerProps> = ({
       const current = videoRef.current.currentTime;
       if (current < startPoint || current >= endPoint) {
         videoRef.current.currentTime = startPoint;
+        currentTimeRef.current = startPoint;
+        lastSetTimeRef.current = startPoint; // ✅ 記錄
       }
       
       videoRef.current.play()
@@ -376,22 +426,35 @@ export const Player: React.FC<PlayerProps> = ({
     }
   }, [isPlaying, startPoint, endPoint]);
 
-  // ✅ 優化 timeUpdate 處理
+  // ✅ 修復 handleTimeUpdate
   const handleTimeUpdate = useCallback(() => {
     if (!videoRef.current || isUpdatingTimeRef.current) return;
     
     const newTime = roundToPrecision(videoRef.current.currentTime, 3);
     
-    // ✅ 只有當時間真的改變時才更新
-    if (Math.abs(newTime - currentTime) < 0.001) return;
+    // ✅ 使用 ref 比較
+    if (Math.abs(newTime - currentTimeRef.current) < 0.01) return;
+    
+    // ✅ 檢查是否是我們剛設置的時間
+    if (Math.abs(newTime - lastSetTimeRef.current) < 0.05) {
+      console.log('🎬 [handleTimeUpdate] 跳過更新 (時間剛被設置)');
+      return;
+    }
+    
+    console.log('🎬 [handleTimeUpdate] 更新時間:', {
+      newTime,
+      oldTime: currentTimeRef.current,
+      diff: Math.abs(newTime - currentTimeRef.current)
+    });
     
     isUpdatingTimeRef.current = true;
+    currentTimeRef.current = newTime;
     
     requestAnimationFrame(() => {
       setCurrentTime(newTime);
       isUpdatingTimeRef.current = false;
     });
-  }, [roundToPrecision, currentTime]);
+  }, [roundToPrecision]);
 
   const handleLoadedMetadata = useCallback(() => {
     console.log('📋 影片 metadata 已載入');
@@ -497,8 +560,9 @@ export const Player: React.FC<PlayerProps> = ({
     const clampedTime = Math.max(startPoint, Math.min(clickedTime, endPoint));
     
     videoRef.current.currentTime = clampedTime;
+    currentTimeRef.current = clampedTime;
+    lastSetTimeRef.current = clampedTime; // ✅ 記錄
   }, [duration, startPoint, endPoint, roundToPrecision]);
-
   if (!video) {
     return (
       <div className="flex-1 flex items-center justify-center bg-black text-gray-500 flex-col min-h-0">
@@ -528,6 +592,7 @@ export const Player: React.FC<PlayerProps> = ({
             setIsPlaying(false);
             if (videoRef.current) {
               videoRef.current.currentTime = startPoint;
+              currentTimeRef.current = startPoint;
             }
           }}
           onClick={togglePlay}
