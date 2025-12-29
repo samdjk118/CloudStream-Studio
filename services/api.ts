@@ -127,6 +127,12 @@ export const fetchThumbnail = async (
   options: ThumbnailOptions = {}
 ): Promise<string> => {
   try {
+    // ✅ 移除 .mp4 副檔名（後端會自動添加）
+    let cleanPath = filename;
+    if (cleanPath.endsWith('.mp4')) {
+      cleanPath = cleanPath.slice(0, -4);
+    }
+
     const url = getThumbnailUrl(filename, options);
     console.log('📸 請求縮圖:', url);
     
@@ -330,4 +336,124 @@ export const pollTaskStatus = async (
     // 等待後繼續
     await new Promise(resolve => setTimeout(resolve, interval));
   }
+};
+
+// ==================== 影片管理 API (新增) ====================
+
+/**
+ * 影片元數據
+ */
+export interface VideoMetadata {
+  id: string;
+  original_name: string;
+  display_name: string;
+  gcs_path: string;
+  size: number;
+  duration: number | null;
+  width: number | null;
+  height: number | null;
+  codec: string | null;
+  fps: number | null;
+  upload_time: string;
+  thumbnail_url: string | null;
+  stream_url: string;
+}
+
+/**
+ * 列出所有影片（帶搜尋）
+ */
+export const listVideos = async (search?: string): Promise<VideoMetadata[]> => {
+  const url = search 
+    ? `${API_BASE}/api/videos/list?search=${encodeURIComponent(search)}`
+    : `${API_BASE}/api/videos/list`;
+  
+  const response = await fetch(url);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to list videos: ${response.statusText}`);
+  }
+  
+  return response.json();
+};
+
+/**
+ * 搜尋影片
+ */
+export interface SearchVideosRequest {
+  query: string;
+  limit?: number;
+}
+
+export interface SearchVideosResponse {
+  videos: VideoMetadata[];
+  total: number;
+  query: string;
+}
+
+export const searchVideos = async (request: SearchVideosRequest): Promise<SearchVideosResponse> => {
+  const response = await fetch(`${API_BASE}/api/videos/search`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Search failed: ${response.statusText}`);
+  }
+  
+  return response.json();
+};
+
+/**
+ * 重新命名影片
+ */
+export interface RenameVideoRequest {
+  gcs_path: string;
+  new_name: string;
+}
+
+export const renameVideo = async (request: RenameVideoRequest): Promise<VideoMetadata> => {
+  const response = await fetch(`${API_BASE}/api/videos/rename`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Rename failed: ${errorText}`);
+  }
+  
+  return response.json();
+};
+
+/**
+ * 剪輯影片（帶自訂檔名）
+ */
+export interface ClipWithNameRequest {
+  source_video: string;
+  start_time: number;
+  end_time: number;
+  output_name: string;
+}
+
+export const clipVideo = async (request: ClipWithNameRequest): Promise<TaskResponse> => {
+  const response = await fetch(`${API_BASE}/api/videos/clip`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Clip failed: ${errorText}`);
+  }
+  
+  return response.json();
 };

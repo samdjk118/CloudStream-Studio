@@ -1,5 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from models import MergeRequest, TaskResponse, HLSConversionRequest
+from models import MergeRequest, TaskResponse, VideoMetadata, RenameVideoRequest, SearchVideosRequest, SearchVideosResponse, ClipWithNameRequest
 from services.gcs_service import GCSService
 from services.ffmpeg_service import FFmpegService
 from services.hls_service import HLSService
@@ -10,6 +10,8 @@ import os
 import shutil
 import logging
 import subprocess
+from typing import Optional, List
+from datetime import datetime
 
 router = APIRouter(prefix="/api/videos", tags=["Video Processing"])
 logger = logging.getLogger(__name__)
@@ -18,6 +20,252 @@ settings = get_settings()
 gcs_service = GCSService()
 ffmpeg_service = FFmpegService()
 hls_service = HLSService()
+
+# ==================== 輔助函數 ====================
+
+def get_video_metadata_from_gcs(blob) -> VideoMetadata:
+    """從 GCS blob 提取影片元數據"""
+    try:
+        blob.reload()
+        metadata = blob.metadata or {}
+        
+        # 取得顯示名稱
+        display_name = metadata.get('display_name')
+        if not display_name:
+            display_name = metadata.get('original_name', blob.name.split('/')[-1])
+            # 移除副檔名
+            if display_name.endswith('.mp4'):
+                display_name = display_name[:-4]
+        
+        # 取得影片 ID (使用 GCS 路徑作為唯一 ID)
+        video_id = blob.name
+        
+        # 解析影片資訊
+        duration = None
+        width = None
+        height = None
+        codec = None
+        fps = None
+        
+        if 'duration' in metadata:
+            try:
+                duration = float(metadata['duration'])
+            except (ValueError, TypeError):
+                pass
+        
+        if 'width' in metadata:
+            try:
+                width = int(metadata['width'])
+            except (ValueError, TypeError):
+                pass
+        
+        if 'height' in metadata:
+            try:
+                height = int(metadata['height'])
+            except (ValueError, TypeError):
+                pass
+        
+        codec = metadata.get('codec')
+        
+        if 'fps' in metadata:
+            try:
+                fps = float(metadata['fps'])
+            except (ValueError, TypeError):
+                pass
+        
+        # 取得縮圖 URL
+        thumbnail_url = metadata.get('thumbnail_url')
+        
+        # 生成串流 URL
+        stream_url = f"/api/stream/{blob.name}"
+        
+        return VideoMetadata(
+            id=video_id,
+            original_name=metadata.get('original_name', blob.name.split('/')[-1]),
+            display_name=display_name,
+            gcs_path=blob.name,
+            size=blob.size,
+            duration=duration,
+            width=width,
+            height=height,
+            codec=codec,
+            fps=fps,
+            upload_time=blob.time_created or datetime.now(),
+            thumbnail_url=thumbnail_url,
+            stream_url=stream_url
+        )
+    except Exception as e:
+        logger.error(f"❌ 解析影片元數據失敗: {e}", exc_info=True)
+        raise
+
+# ==================== 影片列表與搜尋 ====================
+
+@router.get("/list", response_model=List[VideoMetadata])
+async def list_videos(
+    search: Optional[str] = None,
+    limit: int = 100,
+    include_clips: bool = False
+):
+    """
+    列出所有影片
+    
+    Args:
+        search: 搜尋關鍵字（可選）
+        limit: 最大結果數（預設 100）
+        include_clips: 是否包含剪輯片段（預設 False）
+    """
+    try:
+        logger.info(f"📋 列出影片 (搜尋: {search or '無'}, 限制: {limit})")
+        
+        bucket = gcs_service.storage_client.bucket(settings.GCS_BUCKET_NAME)
+        blobs = bucket.list_blobs()
+        
+        videos = []
+        for blob in blobs:
+            # 過濾條件
+            if not blob.name.endswith('.mp4'):
+                continue
+            
+            # 是否包含剪輯片段
+            if not include_clips:
+                if '/clips/' in blob.name or '/merged/' in blob.name:
+                    continue
+            
+            try:
+                video_data = get_video_metadata_from_gcs(blob)
+                
+                # 搜尋過濾
+                if search:
+                    search_lower = search.lower()
+                    if not (search_lower in video_data.display_name.lower() or 
+                           search_lower in video_data.original_name.lower()):
+                        continue
+                
+                videos.append(video_data)
+                
+                # 限制結果數
+                if len(videos) >= limit:
+                    break
+                    
+            except Exception as e:
+                logger.warning(f"⚠️  跳過無效影片 {blob.name}: {e}")
+                continue
+        
+        # 按上傳時間排序（最新在前）
+        videos.sort(key=lambda x: x.upload_time, reverse=True)
+        
+        logger.info(f"   ✅ 找到 {len(videos)} 個影片")
+        return videos
+        
+    except Exception as e:
+        logger.error(f"❌ 列出影片失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"列出影片失敗: {str(e)}")
+
+
+@router.post("/search", response_model=SearchVideosResponse)
+async def search_videos(request: SearchVideosRequest):
+    """
+    搜尋影片
+    
+    Args:
+        request: 搜尋請求（包含 query 和 limit）
+    """
+    try:
+        logger.info(f"🔍 搜尋影片: {request.query}")
+        
+        bucket = gcs_service.storage_client.bucket(settings.GCS_BUCKET_NAME)
+        blobs = bucket.list_blobs()
+        
+        videos = []
+        query_lower = request.query.lower()
+        
+        for blob in blobs:
+            if not blob.name.endswith('.mp4'):
+                continue
+            
+            # 排除剪輯和合併片段
+            if '/clips/' in blob.name or '/merged/' in blob.name:
+                continue
+            
+            try:
+                video_data = get_video_metadata_from_gcs(blob)
+                
+                # 搜尋 display_name 和 original_name
+                if (query_lower in video_data.display_name.lower() or 
+                    query_lower in video_data.original_name.lower()):
+                    videos.append(video_data)
+                
+                # 限制結果數
+                if len(videos) >= request.limit:
+                    break
+                    
+            except Exception as e:
+                logger.warning(f"⚠️  跳過無效影片 {blob.name}: {e}")
+                continue
+        
+        # 按上傳時間排序
+        videos.sort(key=lambda x: x.upload_time, reverse=True)
+        
+        logger.info(f"   ✅ 找到 {len(videos)} 個結果")
+        
+        return SearchVideosResponse(
+            videos=videos,
+            total=len(videos),
+            query=request.query
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ 搜尋失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"搜尋失敗: {str(e)}")
+
+
+# ==================== 重新命名 ====================
+
+@router.put("/rename", response_model=VideoMetadata)
+async def rename_video(request: RenameVideoRequest):
+    """
+    重新命名影片
+    
+    Args:
+        request: 包含 gcs_path 和 new_name
+    """
+    try:
+        logger.info(f"✏️ 重新命名影片: {request.gcs_path} -> {request.new_name}")
+        
+        # 檢查影片是否存在
+        if not gcs_service.file_exists(request.gcs_path):
+            raise HTTPException(status_code=404, detail="影片不存在")
+        
+        # 取得 blob
+        bucket = gcs_service.storage_client.bucket(settings.GCS_BUCKET_NAME)
+        blob = bucket.blob(request.gcs_path)
+        blob.reload()
+        
+        # 更新 metadata
+        current_metadata = blob.metadata or {}
+        current_metadata['display_name'] = request.new_name
+        blob.metadata = current_metadata
+        blob.patch()
+        
+        logger.info(f"   ✅ 重新命名成功")
+        
+        # 清除快取
+        try:
+            from services.gcs_cache import get_connection_pool
+            gcs_pool = get_connection_pool()
+            gcs_pool.invalidate_metadata_cache(settings.GCS_BUCKET_NAME, request.gcs_path)
+            logger.info(f"   ✅ 已清除 metadata 快取")
+        except Exception as e:
+            logger.warning(f"   ⚠️  清除快取失敗: {e}")
+        
+        # 返回更新後的資料
+        return get_video_metadata_from_gcs(blob)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 重新命名失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"重新命名失敗: {str(e)}")
 
 
 # ==================== 合併多個片段 ====================
@@ -173,11 +421,32 @@ async def process_merge_task(task_id: str, request: MergeRequest):
         
         # ==================== 3. 上傳到 GCS ====================
         task_manager.update_task(task_id, progress=0.9, message="Uploading result...")
-        
-        output_path = f"merged/{request.output_name}"
+        output_name = request.output_name+".mp4"
+        output_path = f"merged/{output_name}"
         logger.info(f"📤 [Task {task_id}] 上傳到 GCS: {output_path}")
         gcs_service.upload_file(merged_output, output_path)
         
+        # 設置 metadata（包含 display_name）
+        bucket = gcs_service.client.bucket(settings.GCS_BUCKET_NAME)
+        blob = bucket.blob(output_path)
+        
+        # 移除 .mp4 副檔名作為顯示名稱
+        display_name = output_name[:-4] if output_name.endswith('.mp4') else output_name
+        
+        blob.metadata = {
+            'original_name': request.output_name,
+            'display_name': display_name,  # 設置顯示名稱
+            'duration': str(actual_total_duration),
+            'width': str(merged_info['width']),
+            'height': str(merged_info['height']),
+            'codec': merged_info['codec'],
+            'fps': str(merged_info['fps']),
+            'total_clips': str(total_clips),
+            'created_by': 'merge_task'
+        }
+        blob.patch()
+        
+        logger.info(f"   已設置 metadata: display_name = {display_name}")
         # ==================== 4. 生成縮圖 ====================
         thumbnail_local = os.path.join(temp_dir, "thumbnail.jpg")
         thumbnail_time = round(actual_total_duration / 2, 3)
@@ -187,9 +456,13 @@ async def process_merge_task(task_id: str, request: MergeRequest):
             timestamp=thumbnail_time
         )
         
-        thumbnail_path = f"thumbnails/{request.output_name}.jpg"
+        thumbnail_path = f"thumbnails/{output_name}.jpg"
         gcs_service.upload_file(thumbnail_local, thumbnail_path)
         
+        # ✅ 更新 metadata 加入縮圖 URL
+        blob.metadata['thumbnail_url'] = gcs_service.get_public_url(thumbnail_path)
+        blob.patch()
+
         # ==================== 5. 完成 ====================
         output_url = gcs_service.get_public_url(output_path)
         thumbnail_url = gcs_service.get_public_url(thumbnail_path)
@@ -203,6 +476,8 @@ async def process_merge_task(task_id: str, request: MergeRequest):
             output_url=output_url,
             output_path=output_path,
             metadata={
+                "output_name": request.output_name,  
+                "display_name": display_name,       
                 "total_clips": total_clips,
                 "merged_duration": actual_total_duration,
                 "expected_duration": expected_total_duration,

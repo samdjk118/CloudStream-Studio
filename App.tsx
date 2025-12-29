@@ -1,3 +1,5 @@
+// src/App.tsx
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { VideoLibrary } from './components/VideoLibrary';
 import { Player } from './components/Player';
@@ -10,15 +12,13 @@ const App: React.FC = () => {
   const [videos, setVideos] = useState<VideoAsset[]>([]);
   const [currentVideo, setCurrentVideo] = useState<VideoAsset | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
-  const [isSynthesizing, setIsSynthesizing] = useState(false);
+  const [isSynthesizing] = useState(false);
   const [isLoadingBucket, setIsLoadingBucket] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [previewClipTime, setPreviewClipTime] = useState<{ start: number; end: number } | null>(null);
   
-  // ✅ 使用 ref 追蹤最新的 videos
   const videosRef = useRef<VideoAsset[]>([]);
   
-  // ✅ 同步 ref
   useEffect(() => {
     videosRef.current = videos;
   }, [videos]);
@@ -54,7 +54,7 @@ const App: React.FC = () => {
       );
       
       setVideos(assets);
-      return assets; // ✅ 返回新的 assets
+      return assets;
     } catch (err) {
       console.error("Failed to load files", err);
       setVideos([]);
@@ -64,7 +64,6 @@ const App: React.FC = () => {
     }
   }, [convertToVideoAsset]);
 
-  // ✅ 初始載入
   useEffect(() => {
     loadFiles();
   }, [loadFiles]);
@@ -101,6 +100,15 @@ const App: React.FC = () => {
       console.error(err);
     }
   }, [currentVideo, loadFiles]);
+
+  const handleVideosUpdate = useCallback(async () => {
+    console.log('🔄 重新載入影片列表（重新命名後）');
+    try {
+      await loadFiles();
+    } catch (error) {
+      console.error('❌ 重新載入失敗:', error);
+    }
+  }, [loadFiles]);
 
   const handleDownloadVideo = useCallback(async () => {
     if (!currentVideo) {
@@ -140,7 +148,7 @@ const App: React.FC = () => {
     const asset = videosRef.current.find(v => v.id === clip.sourceVideoId);
     
     if (!asset) {
-      console.warn('找不到源視頻:', clip.sourceVideoId);
+      console.warn('找不到源影片:', clip.sourceVideoId);
       return;
     }
 
@@ -157,15 +165,12 @@ const App: React.FC = () => {
     });
   }, []);
 
-  // ✅ 修復 handleSynthesizeComplete - 避免閉包問題
   const handleSynthesizeComplete = useCallback(async (outputPath: string) => {
     console.log('🎬 合成完成，準備選取新影片:', outputPath);
     
     try {
-      // ✅ 重新載入並獲取新的 videos
       const newVideos = await loadFiles();
       
-      // ✅ 使用返回的新 videos 而不是 state
       const findVideo = (videoList: VideoAsset[]) => 
         videoList.find(v => v.fullPath === outputPath);
       
@@ -178,7 +183,6 @@ const App: React.FC = () => {
       } else {
         console.warn('⚠️ 未找到合成影片，嘗試重新載入');
         
-        // ✅ 延遲後再次嘗試
         await new Promise(resolve => setTimeout(resolve, 1000));
         const retryVideos = await loadFiles();
         synthesizedVideo = findVideo(retryVideos);
@@ -199,7 +203,6 @@ const App: React.FC = () => {
     }
   }, [loadFiles]);
 
-  // ✅ 修復 useEffect - 完整的依賴項
   useEffect(() => {
     if (previewClipTime) {
       const timer = setTimeout(() => {
@@ -208,9 +211,8 @@ const App: React.FC = () => {
       
       return () => clearTimeout(timer);
     }
-  }, [currentVideo, previewClipTime]); // ✅ 添加 previewClipTime
+  }, [currentVideo, previewClipTime]);
 
-  // ✅ 優化 assetMap
   const assetMap = useMemo(() => {
     const map: Record<string, VideoAsset> = {};
     videos.forEach(v => {
@@ -219,7 +221,6 @@ const App: React.FC = () => {
     return map;
   }, [videos]);
 
-  // ✅ 優化 handleSelectVideo
   const handleSelectVideo = useCallback((video: VideoAsset) => {
     setCurrentVideo(video);
     setPreviewClipTime(null);
@@ -273,6 +274,7 @@ const App: React.FC = () => {
           onDelete={handleDelete}
           isLoading={isLoadingBucket}
           isUploading={isUploading}
+          onVideosUpdate={handleVideosUpdate}
         />
 
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">

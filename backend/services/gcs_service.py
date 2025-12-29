@@ -34,6 +34,8 @@ class GCSService:
                     credentials=credentials,
                     project=settings.project_id
                 )
+               
+                self.storage_client = self.client
                 
                 logger.info(f"✅ GCS Client initialized with Service Account")
                 

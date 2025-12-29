@@ -1,3 +1,5 @@
+// src/components/Timeline.tsx
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Clip, VideoAsset } from '../types';
 import { Trash2, Play, Film, Sparkles, GripHorizontal, Eye } from 'lucide-react';
@@ -13,6 +15,10 @@ interface TimelineProps {
   onPreviewClip?: (clip: Clip) => void;
 }
 
+const MIN_HEIGHT = 150;
+const MAX_HEIGHT = 600;
+const DEFAULT_HEIGHT = 240;
+
 export const Timeline: React.FC<TimelineProps> = ({
   clips,
   assets,
@@ -23,36 +29,42 @@ export const Timeline: React.FC<TimelineProps> = ({
   onPreviewClip
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [timelineHeight, setTimelineHeight] = useState(240);
+  const [timelineHeight, setTimelineHeight] = useState(DEFAULT_HEIGHT);
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartY = useRef(0);
   const resizeStartHeight = useRef(0);
-  const lastSavedHeight = useRef(240); // ✅ 追蹤上次儲存的高度
+  const lastSavedHeight = useRef(DEFAULT_HEIGHT);
 
   // 合併任務狀態
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [synthesizeTaskStatus, setSynthesizeTaskStatus] = useState<TaskStatus | null>(null);
+  const [showMergeDialog, setShowMergeDialog] = useState(false);
+  const [mergeOutputName, setMergeOutputName] = useState('');
 
-  // ✅ 處理拖曳調整高度
+  // ==================== 高度調整 ====================
+
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizing(true);
     resizeStartY.current = e.clientY;
     resizeStartHeight.current = timelineHeight;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
   }, [timelineHeight]);
 
-  // ✅ 拖曳 effect
   useEffect(() => {
     if (!isResizing) return;
 
     const handleResizeMove = (e: MouseEvent) => {
       const deltaY = resizeStartY.current - e.clientY;
-      const newHeight = Math.max(150, Math.min(500, resizeStartHeight.current + deltaY));
+      const newHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, resizeStartHeight.current + deltaY));
       setTimelineHeight(newHeight);
     };
 
     const handleResizeEnd = () => {
       setIsResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     };
 
     document.addEventListener('mousemove', handleResizeMove);
@@ -64,24 +76,27 @@ export const Timeline: React.FC<TimelineProps> = ({
     };
   }, [isResizing]);
 
-  // ✅ 載入高度偏好 - 只在 mount 時執行一次
+  // 載入高度偏好
   useEffect(() => {
     const savedHeight = localStorage.getItem('timelineHeight');
     if (savedHeight) {
       const height = parseInt(savedHeight);
-      setTimelineHeight(height);
-      lastSavedHeight.current = height;
+      if (height >= MIN_HEIGHT && height <= MAX_HEIGHT) {
+        setTimelineHeight(height);
+        lastSavedHeight.current = height;
+      }
     }
-  }, []); // ✅ 空依賴，只執行一次
+  }, []);
 
-  // ✅ 儲存高度偏好 - 優化版本
+  // 儲存高度偏好
   useEffect(() => {
-    // 只有在不拖曳且高度真的改變時才儲存
     if (!isResizing && Math.abs(timelineHeight - lastSavedHeight.current) > 1) {
       localStorage.setItem('timelineHeight', timelineHeight.toString());
       lastSavedHeight.current = timelineHeight;
     }
   }, [timelineHeight, isResizing]);
+
+  // ==================== 工具函數 ====================
 
   const formatTime = useCallback((seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -92,85 +107,81 @@ export const Timeline: React.FC<TimelineProps> = ({
 
   const totalDuration = clips.reduce((sum, clip) => sum + (clip.endTime - clip.startTime), 0);
 
-  // ✅ 合成視頻 - 修復清空片段的邏輯
-  const handleSynthesize = useCallback(async () => {
+  // ==================== 合併處理 ====================
+
+  const handleSynthesizeClick = useCallback(() => {
     if (clips.length === 0) {
-      alert('沒有片段可以合成');
+      alert('請先添加至少一個片段');
       return;
     }
 
+    setShowMergeDialog(true);
+    setMergeOutputName(`合併影片_${Date.now()}`);
+  }, [clips.length]);
+
+  const handleConfirmMerge = useCallback(async () => {
+    if (!mergeOutputName.trim()) {
+      alert('請輸入輸出檔名');
+      return;
+    }
+
+    setShowMergeDialog(false);
     setIsSynthesizing(true);
     setSynthesizeTaskStatus(null);
 
     try {
-      const timestamp = Date.now();
-      const outputName = `merged_${timestamp}.mp4`;
-
       const mergeRequest = {
         clips: clips.map(clip => {
           const asset = assets[clip.sourceVideoId];
+          const gcsPath = (asset as any).fullPath || asset.name;
+          
           return {
-            source_video: asset?.fullPath || asset?.name || '',
-            start_time: clip.startTime,
-            end_time: clip.endTime
+            source_video: gcsPath,
+            start_time: parseFloat(clip.startTime.toFixed(3)),
+            end_time: parseFloat(clip.endTime.toFixed(3)),
           };
         }),
-        output_name: outputName
+        output_name: mergeOutputName.trim()
       };
 
       console.log('🔗 開始合併:', mergeRequest);
 
       const response = await mergeVideos(mergeRequest);
-      console.log('✅ 合併任務已創建:', response);
+      console.log('✅ 合併任務已建立:', response.task_id);
 
       const finalStatus = await pollTaskStatus(
         response.task_id,
         (status) => {
-          console.log('📊 合併進度:', status);
+          console.log(`📊 合併進度: ${(status.progress * 100).toFixed(1)}%`);
           setSynthesizeTaskStatus(status);
-        },
-        2000,
-        600000
+        }
       );
 
       if (finalStatus.status === 'completed') {
-        console.log('✅ 合併完成:', finalStatus);
-
+        console.log('✅ 合併完成:', finalStatus.output_path);
+        
         const metadata = finalStatus.metadata;
         
-        // ✅ 顯示成功訊息
         alert(`✅ 合併完成！\n\n` +
-              `片段數: ${metadata?.total_clips}\n` +
-              `總時長: ${metadata?.merged_duration?.toFixed(3)}s\n` +
-              `誤差: ${metadata?.duration_error_ms}ms\n` +
-              `精度: ${metadata?.precision_level}\n\n` +
-              `正在載入合成影片...`);
+              `檔名: ${mergeOutputName}\n` +
+              `片段數: ${metadata?.total_clips || clips.length}\n` +
+              `總時長: ${metadata?.merged_duration?.toFixed(3) || totalDuration.toFixed(3)}s\n` +
+              `誤差: ${metadata?.duration_error_ms || 0}ms\n` +
+              `精度: ${metadata?.precision_level || 'good'}`);
 
-        // ✅ 清空所有片段 - 使用 batch 操作
+        // 清空片段
         console.log('🗑️ 清空時間軸片段');
-        
-        // ✅ 方法 1: 收集所有 ID 後一次性處理
         const clipIds = clips.map(clip => clip.id);
-        
-        // 延遲執行，避免在渲染過程中修改 state
         setTimeout(() => {
           clipIds.forEach(id => onRemoveClip(id));
         }, 0);
 
-        // ✅ 通知父組件選取新影片
+        // 通知父組件選取新影片
         if (finalStatus.output_path && onSynthesizeComplete) {
           console.log('📹 選取合成影片:', finalStatus.output_path);
-          // 延遲執行，確保片段已清空
           setTimeout(() => {
             onSynthesizeComplete(finalStatus.output_path);
           }, 100);
-        }
-
-        // 可選：延遲打開結果
-        if (finalStatus.output_url) {
-          setTimeout(() => {
-            window.open(finalStatus.output_url, '_blank');
-          }, 1000);
         }
 
       } else {
@@ -184,29 +195,36 @@ export const Timeline: React.FC<TimelineProps> = ({
       setIsSynthesizing(false);
       setSynthesizeTaskStatus(null);
     }
-  }, [clips, assets, onRemoveClip, onSynthesizeComplete]);
+  }, [clips, assets, mergeOutputName, totalDuration, onRemoveClip, onSynthesizeComplete]);
+
+  // ==================== 渲染 ====================
 
   return (
     <div 
       ref={containerRef}
-      className="bg-[#1a1a1a] border-t border-[#333] flex flex-col shrink-0"
+      className="bg-[#1a1a1a] border-t border-[#333] flex flex-col shrink-0 relative"
       style={{ height: `${timelineHeight}px` }}
     >
-      {/* Resize Handle */}
+      {/* ✅ 拖動調整高度的握把 */}
       <div
-        className={`h-1 bg-[#333] hover:bg-blue-500 cursor-row-resize flex items-center justify-center group transition-colors relative ${
-          isResizing ? 'bg-blue-500' : ''
+        className={`absolute top-0 left-0 right-0 h-1 cursor-ns-resize group hover:bg-blue-500 transition-colors ${
+          isResizing ? 'bg-blue-500' : 'bg-transparent'
         }`}
         onMouseDown={handleResizeStart}
       >
-        <div className="absolute inset-0 flex items-center justify-center">
-          <GripHorizontal className="w-5 h-5 text-gray-600 group-hover:text-blue-400 transition-colors" />
+        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+          <div className={`flex items-center justify-center w-16 h-6 rounded-full transition-all ${
+            isResizing 
+              ? 'bg-blue-600 shadow-lg scale-110' 
+              : 'bg-[#333] group-hover:bg-blue-600 group-hover:shadow-lg'
+          }`}>
+            <GripHorizontal className="w-4 h-4 text-white" />
+          </div>
         </div>
-        <div className="absolute inset-x-0 -top-2 -bottom-2" />
       </div>
 
       {/* Header */}
-      <div className="h-12 px-4 border-b border-[#333] flex items-center justify-between shrink-0">
+      <div className="h-12 px-4 border-b border-[#333] flex items-center justify-between shrink-0 mt-1">
         <div className="flex items-center gap-3">
           <Film className="w-5 h-5 text-blue-400" />
           <h3 className="text-white font-semibold">Timeline Sequence</h3>
@@ -226,7 +244,7 @@ export const Timeline: React.FC<TimelineProps> = ({
         </div>
         
         <button
-          onClick={handleSynthesize}
+          onClick={handleSynthesizeClick}
           disabled={clips.length === 0 || isSynthesizing}
           className="flex items-center gap-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 disabled:from-gray-700 disabled:to-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition disabled:cursor-not-allowed shadow-lg"
         >
@@ -244,7 +262,7 @@ export const Timeline: React.FC<TimelineProps> = ({
         </button>
       </div>
 
-      {/* Clips Container - 可滾動 */}
+      {/* Clips Container */}
       <div className="flex-1 overflow-y-auto overflow-x-auto p-4">
         {clips.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-gray-500">
@@ -266,12 +284,12 @@ export const Timeline: React.FC<TimelineProps> = ({
                   className="group relative bg-[#222] border border-[#333] rounded-lg p-3 hover:border-blue-500/50 transition-all"
                 >
                   {/* Clip Number Badge */}
-                  <div className="absolute -left-2 -top-2 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-lg">
+                  <div className="absolute -left-2 -top-2 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-lg z-10">
                     {index + 1}
                   </div>
 
                   <div className="flex items-center gap-3">
-                    {/* ✅ 可點擊的縮圖 - 預覽片段 */}
+                    {/* 可點擊的縮圖 */}
                     <div 
                       className="w-24 h-14 bg-black rounded flex items-center justify-center text-gray-600 shrink-0 relative overflow-hidden cursor-pointer hover:ring-2 hover:ring-blue-500 transition group/thumb"
                       onClick={() => onPreviewClip && onPreviewClip(clip)}
@@ -313,15 +331,17 @@ export const Timeline: React.FC<TimelineProps> = ({
                       )}
                     </div>
 
-                    {/* ✅ Actions - 添加預覽按鈕 */}
+                    {/* Actions */}
                     <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => onPreviewClip && onPreviewClip(clip)}
-                        className="p-2 hover:bg-blue-600/20 rounded text-gray-400 hover:text-blue-400 transition"
-                        title="預覽片段"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
+                      {onPreviewClip && (
+                        <button
+                          onClick={() => onPreviewClip(clip)}
+                          className="p-2 hover:bg-blue-600/20 rounded text-gray-400 hover:text-blue-400 transition"
+                          title="預覽片段"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                      )}
                       <button
                         onClick={() => onRemoveClip(clip.id)}
                         className="p-2 hover:bg-red-600/20 rounded text-gray-400 hover:text-red-400 transition"
@@ -346,11 +366,67 @@ export const Timeline: React.FC<TimelineProps> = ({
         )}
       </div>
 
-      {/* Footer - 高度指示器 */}
+      {/* Footer */}
       <div className="h-8 px-4 border-t border-[#333] flex items-center justify-between text-[10px] text-gray-600 shrink-0">
         <span>Timeline Height: {timelineHeight}px</span>
         <span className="text-gray-700">Drag the line above to resize</span>
       </div>
+
+      {/* ✅ 合併對話框 */}
+      {showMergeDialog && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a1a] border border-[#333] rounded-lg p-6 w-96 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-purple-400" />
+              合併影片
+            </h3>
+            
+            <div className="mb-4 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-400">片段數量:</span>
+                <span className="text-white font-medium">{clips.length}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-400">總時長:</span>
+                <span className="text-white font-mono">{formatTime(totalDuration)}</span>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                輸出檔名:
+              </label>
+              <input
+                type="text"
+                value={mergeOutputName}
+                onChange={(e) => setMergeOutputName(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleConfirmMerge()}
+                placeholder="請輸入檔名"
+                className="w-full px-3 py-2 bg-[#222] border border-[#333] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition"
+                autoFocus
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                自動添加 .mp4 副檔名
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleConfirmMerge}
+                className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded-lg transition font-medium"
+              >
+                開始合併
+              </button>
+              <button
+                onClick={() => setShowMergeDialog(false)}
+                className="flex-1 px-4 py-2 bg-[#333] hover:bg-[#444] text-white rounded-lg transition"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
