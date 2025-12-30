@@ -1,7 +1,7 @@
 docker run -d \
   --name cloudstream-studio \
   -p 80:80 \
-  -e GCP_PROJECT_ID=dh-veo3-ai \
-  -e GCS_BUCKET_NAME=dh-dreamer-v \
+  -e GCP_PROJECT_ID=<your-project> \
+  -e GCS_BUCKET_NAME=<your-bucket> \
   -v $(pwd)/backend/credentials/credentials.json:/app/credentials/credentials.json:ro \
   cloudstream:latest
