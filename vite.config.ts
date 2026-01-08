@@ -51,7 +51,7 @@ export default defineConfig(({ command, mode }) => {
     const env = { ...viteEnv, ...customEnv };
     
     // 獲取 API Base URL
-    const apiBaseUrl = env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+    const apiBaseUrl = env.VITE_API_BASE_URL;
     
     console.log('VITE_API_BASE_URL:', apiBaseUrl);
     console.log('======================');

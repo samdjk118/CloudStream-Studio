@@ -14,7 +14,7 @@ export const getThumbnailWithCache = async (
   options: Omit<ThumbnailOptions, 'time_offset'> = {}
 ): Promise<string> => {
   // 從 videoUrl 提取檔案路徑
-  const urlObj = new URL(videoUrl);
+  const urlObj = new URL(videoUrl, window.location.origin);
   const pathParts = urlObj.pathname.split('/api/stream/');
   
   if (pathParts.length < 2) {
@@ -73,7 +73,7 @@ export const clearThumbnailCache = () => {
  * 清除特定影片的縮圖快取
  */
 export const clearThumbnailForVideo = (videoUrl: string) => {
-  const urlObj = new URL(videoUrl);
+  const urlObj = new URL(videoUrl, window.location.origin);
   const pathParts = urlObj.pathname.split('/api/stream/');
   
   if (pathParts.length < 2) return;

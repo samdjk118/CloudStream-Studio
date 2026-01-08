@@ -19,7 +19,7 @@ interface VideoLibraryProps {
 }
 
 const ITEMS_PER_PAGE = 12;
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 const OPTIMIZE_TIMEOUT = 5 * 60 * 1000;
 const POLL_INTERVAL = 3000;
 

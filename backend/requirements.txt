@@ -19,7 +19,6 @@ click-repl==0.3.0
 cryptography==46.0.3
 cyclonedx-python-lib==11.6.0
 defusedxml==0.7.1
-ecdsa==0.19.1
 fastapi==0.109.1
 ffmpeg-python==0.2.0
 filelock==3.20.1

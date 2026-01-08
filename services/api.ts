@@ -1,8 +1,7 @@
 // src/services/api.ts
 
 // API_BASE
-export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 console.log('🔧 API Base URL:', API_BASE);
 
 // ==================== 類型定義 ====================
@@ -103,20 +102,21 @@ export const getStreamUrl = (filename: string): string => {
  * 獲取影片縮圖 URL（正確的後端端點）
  */
 export const getThumbnailUrl = (
-  filename: string,
-  options: ThumbnailOptions = {}
-): string => {
-  const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
-  const params = new URLSearchParams();
-  
-  if (options.width) params.append('width', options.width.toString());
-  if (options.height) params.append('height', options.height.toString());
-  if (options.time_offset !== undefined) params.append('time_offset', options.time_offset.toString());
-  if (options.force_regenerate) params.append('force_regenerate', 'true');
-  
-  const queryString = params.toString();
-  // 修正：使用正確的後端端點
-  return `${API_BASE}/api/thumbnails/video/${encodedPath}${queryString ? '?' + queryString : ''}`;
+    filename: string,
+    options: ThumbnailOptions = {}
+  ): string => {
+    const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
+    const params = new URLSearchParams();
+    
+    if (options.width) params.append('width', options.width.toString());
+    if (options.height) params.append('height', options.height.toString());
+    if (options.time_offset !== undefined) params.append('time_offset', options.time_offset.toString());
+    if (options.force_regenerate) params.append('force_regenerate', 'true');
+    
+    const queryString = params.toString();
+    const basePath = API_BASE || ''; 
+    const url = `${basePath}/api/thumbnails/video/${encodedPath}${queryString ? '?' + queryString : ''}`;
+    return url;
 };
 
 /**

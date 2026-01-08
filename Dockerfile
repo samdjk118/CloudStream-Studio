@@ -5,7 +5,7 @@
 # ============================================================
 FROM node:18-alpine AS frontend-builder
 # 定義構建參數
-ARG VITE_API_URL=http://localhost
+ARG VITE_API_BASE_URL=
 ARG NODE_ENV=prod
 
 WORKDIR /app/frontend
@@ -20,12 +20,12 @@ RUN npm ci
 COPY ./ ./
 
 # 設置環境變數（供 Vite 使用）
-ENV VITE_API_URL=${VITE_API_URL}
+ENV VITE_API_BASE_URL=${VITE_API_URL}
 ENV NODE_ENV=${NODE_ENV}
 
 # 顯示構建信息（用於調試）
 RUN echo "Building with:" && \
-    echo "  VITE_API_URL=${VITE_API_URL}" && \
+    echo "  VITE_API_BASE_URL=${VITE_API_URL}" && \
     echo "  NODE_ENV=${NODE_ENV}"
 
 # 建立生產版本
@@ -44,7 +44,7 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     APP_HOME=/app \
-    GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/credentials.json
+    GOOGLE_APPLICATION_CREDENTIALS=/app/backend/credentials/credentials.json
 
 WORKDIR $APP_HOME
 
@@ -73,7 +73,7 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY startup.sh ./
 
 # 建立必要目錄
-RUN mkdir -p backend/credentials /var/log/supervisor && \
+RUN mkdir -p /app/backend/credentials /var/log/supervisor && \
     chmod +x startup.sh
 
 # 暴露 port
