@@ -6,7 +6,7 @@ import { Player } from './components/Player';
 import { Timeline } from './components/Timeline';
 import { VideoAsset, Clip } from './types';
 import { Video as VideoIcon, Download } from 'lucide-react';
-import { fetchFiles, uploadFile, deleteFile, getStreamUrl, GCSFile } from './services/api';
+import { fetchFiles, uploadFile, deleteFile, getStreamUrl, GCSFile, listVideos, VideoMetadata } from './services/api';
 
 const App: React.FC = () => {
   const [videos, setVideos] = useState<VideoAsset[]>([]);
@@ -16,43 +16,36 @@ const App: React.FC = () => {
   const [isLoadingBucket, setIsLoadingBucket] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [previewClipTime, setPreviewClipTime] = useState<{ start: number; end: number } | null>(null);
-  
+
   const videosRef = useRef<VideoAsset[]>([]);
-  
+
   useEffect(() => {
     videosRef.current = videos;
   }, [videos]);
 
-  const convertToVideoAsset = useCallback((file: GCSFile, index: number): VideoAsset => {
-    const displayName = file.name.split('/').pop() || file.name;
-    const streamUrl = getStreamUrl(file.name);
-    
+  const convertToVideoAsset = useCallback((file: VideoMetadata, index: number): VideoAsset => {
     return {
-      id: `${file.name}-${index}`,
-      name: displayName,
-      url: streamUrl,
-      duration: 0,
+      id: file.id || `${file.gcs_path}-${index}`,
+      name: file.display_name,
+      url: file.stream_url,
+      duration: file.duration || 0,
       source: 'bucket' as const,
-      fullPath: file.name,
+      fullPath: file.gcs_path,
       size: file.size,
-      contentType: file.content_type,
-      thumbnail: undefined
+      contentType: 'video/mp4',
+      thumbnail: file.thumbnail_url || undefined
     };
   }, []);
 
   const loadFiles = useCallback(async () => {
     setIsLoadingBucket(true);
     try {
-      const files = await fetchFiles();
-      
-      const videoFiles = files.filter(file => 
-        file.content_type && file.content_type.startsWith('video/')
-      );
-      
-      const assets: VideoAsset[] = videoFiles.map((file, index) => 
+      const videoFiles = await listVideos();
+
+      const assets: VideoAsset[] = videoFiles.map((file, index) =>
         convertToVideoAsset(file, index)
       );
-      
+
       setVideos(assets);
       return assets;
     } catch (err) {
@@ -86,13 +79,13 @@ const App: React.FC = () => {
     try {
       const pathToDelete = (video as any).fullPath || video.name;
       await deleteFile(pathToDelete);
-      
+
       if (currentVideo?.id === video.id) {
         setCurrentVideo(null);
       }
-      
+
       setClips(prev => prev.filter(c => c.sourceVideoId !== video.id));
-      
+
       await loadFiles();
       alert('Delete successful!');
     } catch (err) {
@@ -124,7 +117,7 @@ const App: React.FC = () => {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      
+
       console.log('Downloading:', currentVideo.name);
     } catch (err) {
       console.error('Download failed:', err);
@@ -146,7 +139,7 @@ const App: React.FC = () => {
 
   const handlePreviewClip = useCallback((clip: Clip) => {
     const asset = videosRef.current.find(v => v.id === clip.sourceVideoId);
-    
+
     if (!asset) {
       console.warn('找不到源影片:', clip.sourceVideoId);
       return;
@@ -167,26 +160,26 @@ const App: React.FC = () => {
 
   const handleSynthesizeComplete = useCallback(async (outputPath: string) => {
     console.log('🎬 合成完成，準備選取新影片:', outputPath);
-    
+
     try {
       const newVideos = await loadFiles();
-      
-      const findVideo = (videoList: VideoAsset[]) => 
+
+      const findVideo = (videoList: VideoAsset[]) =>
         videoList.find(v => v.fullPath === outputPath);
-      
+
       let synthesizedVideo = findVideo(newVideos);
-      
+
       if (synthesizedVideo) {
         console.log('✅ 找到合成影片，自動選取:', synthesizedVideo.name);
         setCurrentVideo(synthesizedVideo);
         setPreviewClipTime(null);
       } else {
         console.warn('⚠️ 未找到合成影片，嘗試重新載入');
-        
+
         await new Promise(resolve => setTimeout(resolve, 1000));
         const retryVideos = await loadFiles();
         synthesizedVideo = findVideo(retryVideos);
-        
+
         if (synthesizedVideo) {
           console.log('✅ 第二次嘗試成功，選取影片:', synthesizedVideo.name);
           setCurrentVideo(synthesizedVideo);
@@ -196,7 +189,7 @@ const App: React.FC = () => {
           alert('合成完成，但無法自動選取影片。請手動從列表中選擇。');
         }
       }
-      
+
     } catch (error) {
       console.error('❌ 選取合成影片失敗:', error);
       alert('選取合成影片失敗，請手動從列表中選擇。');
@@ -208,7 +201,7 @@ const App: React.FC = () => {
       const timer = setTimeout(() => {
         setPreviewClipTime(null);
       }, 100);
-      
+
       return () => clearTimeout(timer);
     }
   }, [currentVideo, previewClipTime]);
@@ -232,7 +225,7 @@ const App: React.FC = () => {
       <header className="h-14 border-b border-[#333] bg-[#1a1a1a] flex items-center px-4 justify-between shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-purple-600 rounded flex items-center justify-center shadow-lg">
-             <VideoIcon className="w-5 h-5 text-white" />
+            <VideoIcon className="w-5 h-5 text-white" />
           </div>
           <h1 className="text-lg font-bold tracking-tight">
             CloudStream <span className="text-blue-400 font-light">Manager</span>
@@ -248,13 +241,12 @@ const App: React.FC = () => {
           <div className="text-xs text-gray-400 bg-[#222] px-3 py-1 rounded-full border border-[#333]">
             {clips.length} clip{clips.length !== 1 ? 's' : ''}
           </div>
-          
-          <button 
-            className={`flex items-center gap-2 px-4 py-1.5 rounded text-sm transition ${
-              currentVideo 
-                ? 'bg-blue-600 hover:bg-blue-500 text-white' 
+
+          <button
+            className={`flex items-center gap-2 px-4 py-1.5 rounded text-sm transition ${currentVideo
+                ? 'bg-blue-600 hover:bg-blue-500 text-white'
                 : 'bg-[#333] text-gray-500 cursor-not-allowed'
-            }`}
+              }`}
             onClick={handleDownloadVideo}
             disabled={!currentVideo}
             title={currentVideo ? `Download ${currentVideo.name}` : 'No video selected'}
@@ -267,8 +259,8 @@ const App: React.FC = () => {
 
       {/* Main Workspace */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        <VideoLibrary 
-          videos={videos} 
+        <VideoLibrary
+          videos={videos}
           onSelectVideo={handleSelectVideo}
           onUpload={handleUpload}
           onDelete={handleDelete}
@@ -279,15 +271,15 @@ const App: React.FC = () => {
 
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <div className="flex-1 min-h-0 flex flex-col">
-            <Player 
-              video={currentVideo} 
+            <Player
+              video={currentVideo}
               onAddClip={handleAddClip}
               previewTime={previewClipTime}
             />
           </div>
-          
-          <Timeline 
-            clips={clips} 
+
+          <Timeline
+            clips={clips}
             assets={assetMap}
             onRemoveClip={handleRemoveClip}
             onSynthesize={handleSynthesize}

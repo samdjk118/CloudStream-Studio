@@ -23,10 +23,11 @@ hls_service = HLSService()
 
 # ==================== 輔助函數 ====================
 
-def get_video_metadata_from_gcs(blob) -> VideoMetadata:
+def get_video_metadata_from_gcs(blob, reload: bool = False) -> VideoMetadata:
     """從 GCS blob 提取影片元數據"""
     try:
-        blob.reload()
+        if reload:
+            blob.reload()
         metadata = blob.metadata or {}
         
         # 取得顯示名稱
