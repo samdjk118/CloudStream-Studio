@@ -77,8 +77,8 @@ def get_video_metadata_from_gcs(blob, reload: bool = False) -> VideoMetadata:
         # 取得縮圖 URL
         thumbnail_url = metadata.get('thumbnail_url')
         
-        # 生成串流 URL
-        stream_url = f"/api/stream/{blob.name}"
+        # 生成串流 URL (提供 4 小時效期的 Signed URL)
+        stream_url = gcs_service.get_signed_url(blob.name, expiration=14400)
         
         return VideoMetadata(
             id=video_id,
