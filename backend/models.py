@@ -143,6 +143,14 @@ class VideoMetadata(BaseModel):
         }
 
 
+class ListVideosResponse(BaseModel):
+    """影片列表結果"""
+    videos: List[VideoMetadata]
+    total: int = Field(..., description="影片總數")
+    page: int = Field(..., description="目前頁碼")
+    total_pages: int = Field(..., description="總頁數")
+
+
 class RenameVideoRequest(BaseModel):
     """重新命名請求"""
     gcs_path: str = Field(..., description="GCS 路徑")
@@ -176,13 +184,15 @@ class RenameVideoRequest(BaseModel):
 class SearchVideosRequest(BaseModel):
     """搜尋請求"""
     query: str = Field(..., min_length=1, description="搜尋關鍵字")
-    limit: Optional[int] = Field(100, ge=1, le=1000, description="最大結果數")
+    page: int = Field(1, ge=1, description="頁面索引")
+    page_size: int = Field(12, ge=1, le=1000, description="每頁結果數")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "query": "精彩",
-                "limit": 50
+                "page": 1,
+                "page_size": 12
             }
         }
 
@@ -191,6 +201,8 @@ class SearchVideosResponse(BaseModel):
     """搜尋結果"""
     videos: List[VideoMetadata]
     total: int = Field(..., description="結果總數")
+    page: int = Field(..., description="目前頁碼")
+    total_pages: int = Field(..., description="總頁數")
     query: str = Field(..., description="搜尋關鍵字")
 
 

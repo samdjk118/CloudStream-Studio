@@ -1,5 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from models import MergeRequest, TaskResponse, VideoMetadata, RenameVideoRequest, SearchVideosRequest, SearchVideosResponse, ClipWithNameRequest
+from models import MergeRequest, TaskResponse, VideoMetadata, RenameVideoRequest, SearchVideosRequest, SearchVideosResponse, ClipWithNameRequest, ListVideosResponse
 from services.gcs_service import GCSService
 from services.ffmpeg_service import FFmpegService
 from services.hls_service import HLSService
@@ -101,10 +101,11 @@ def get_video_metadata_from_gcs(blob, reload: bool = False) -> VideoMetadata:
 
 # ==================== 影片列表與搜尋 ====================
 
-@router.get("/list", response_model=List[VideoMetadata])
+@router.get("/list", response_model=ListVideosResponse)
 async def list_videos(
     search: Optional[str] = None,
-    limit: int = 100,
+    page: int = 1,
+    page_size: int = 12,
     include_clips: bool = False
 ):
     """
@@ -112,11 +113,12 @@ async def list_videos(
     
     Args:
         search: 搜尋關鍵字（可選）
-        limit: 最大結果數（預設 100）
+        page: 頁面索引（預設 1）
+        page_size: 每頁結果數（預設 12）
         include_clips: 是否包含剪輯片段（預設 False）
     """
     try:
-        logger.info(f"📋 列出影片 (搜尋: {search or '無'}, 限制: {limit})")
+        logger.info(f"📋 列出影片 (搜尋: {search or '無'}, 第 {page} 頁)")
         
         bucket = gcs_service.storage_client.bucket(settings.GCS_BUCKET_NAME)
         blobs = bucket.list_blobs()
@@ -129,7 +131,7 @@ async def list_videos(
             
             # 是否包含剪輯片段
             if not include_clips:
-                if '/clips/' in blob.name or '/merged/' in blob.name:
+                if '/clips/' in blob.name:
                     continue
             
             try:
@@ -144,10 +146,6 @@ async def list_videos(
                 
                 videos.append(video_data)
                 
-                # 限制結果數
-                if len(videos) >= limit:
-                    break
-                    
             except Exception as e:
                 logger.warning(f"⚠️  跳過無效影片 {blob.name}: {e}")
                 continue
@@ -155,8 +153,22 @@ async def list_videos(
         # 按上傳時間排序（最新在前）
         videos.sort(key=lambda x: x.upload_time, reverse=True)
         
-        logger.info(f"   ✅ 找到 {len(videos)} 個影片")
-        return videos
+        total = len(videos)
+        total_pages = (total + page_size - 1) // page_size
+        
+        # 分頁 slicing
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_videos = videos[start_idx:end_idx]
+        
+        logger.info(f"   ✅ 找到 {total} 個影片，回傳第 {page} 頁 ({len(paginated_videos)} 筆)")
+        
+        return ListVideosResponse(
+            videos=paginated_videos,
+            total=total,
+            page=page,
+            total_pages=total_pages
+        )
         
     except Exception as e:
         logger.error(f"❌ 列出影片失敗: {e}", exc_info=True)
@@ -169,10 +181,10 @@ async def search_videos(request: SearchVideosRequest):
     搜尋影片
     
     Args:
-        request: 搜尋請求（包含 query 和 limit）
+        request: 搜尋請求（包含 query, page, page_size）
     """
     try:
-        logger.info(f"🔍 搜尋影片: {request.query}")
+        logger.info(f"🔍 搜尋影片: {request.query} (第 {request.page} 頁)")
         
         bucket = gcs_service.storage_client.bucket(settings.GCS_BUCKET_NAME)
         blobs = bucket.list_blobs()
@@ -184,8 +196,8 @@ async def search_videos(request: SearchVideosRequest):
             if not blob.name.endswith('.mp4'):
                 continue
             
-            # 排除剪輯和合併片段
-            if '/clips/' in blob.name or '/merged/' in blob.name:
+            # 排除剪輯片段
+            if '/clips/' in blob.name:
                 continue
             
             try:
@@ -196,10 +208,6 @@ async def search_videos(request: SearchVideosRequest):
                     query_lower in video_data.original_name.lower()):
                     videos.append(video_data)
                 
-                # 限制結果數
-                if len(videos) >= request.limit:
-                    break
-                    
             except Exception as e:
                 logger.warning(f"⚠️  跳過無效影片 {blob.name}: {e}")
                 continue
@@ -207,11 +215,21 @@ async def search_videos(request: SearchVideosRequest):
         # 按上傳時間排序
         videos.sort(key=lambda x: x.upload_time, reverse=True)
         
-        logger.info(f"   ✅ 找到 {len(videos)} 個結果")
+        total = len(videos)
+        total_pages = (total + request.page_size - 1) // request.page_size
+        
+        # 分頁 slicing
+        start_idx = (request.page - 1) * request.page_size
+        end_idx = start_idx + request.page_size
+        paginated_videos = videos[start_idx:end_idx]
+        
+        logger.info(f"   ✅ 找到 {total} 個結果")
         
         return SearchVideosResponse(
-            videos=videos,
-            total=len(videos),
+            videos=paginated_videos,
+            total=total,
+            page=request.page,
+            total_pages=total_pages,
             query=request.query
         )
         

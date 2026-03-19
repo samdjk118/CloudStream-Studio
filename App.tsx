@@ -6,7 +6,7 @@ import { Player } from './components/Player';
 import { Timeline } from './components/Timeline';
 import { VideoAsset, Clip } from './types';
 import { Video as VideoIcon, Download } from 'lucide-react';
-import { fetchFiles, uploadFile, deleteFile, getStreamUrl, GCSFile, listVideos, VideoMetadata } from './services/api';
+import { fetchFiles, uploadFile, deleteFile, getStreamUrl, GCSFile, listVideos, searchVideos, VideoMetadata } from './services/api';
 
 const App: React.FC = () => {
   const [videos, setVideos] = useState<VideoAsset[]>([]);
@@ -16,6 +16,12 @@ const App: React.FC = () => {
   const [isLoadingBucket, setIsLoadingBucket] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [previewClipTime, setPreviewClipTime] = useState<{ start: number; end: number } | null>(null);
+
+  const [videosCache, setVideosCache] = useState<Record<string, VideoAsset>>({});
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalVideos, setTotalVideos] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const videosRef = useRef<VideoAsset[]>([]);
 
@@ -37,28 +43,55 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const loadFiles = useCallback(async () => {
+  const loadFiles = useCallback(async (page: number = currentPage, search: string = searchQuery) => {
     setIsLoadingBucket(true);
     try {
-      const videoFiles = await listVideos();
+      let response;
+      if (search) {
+        response = await searchVideos({ query: search, page, page_size: 12 });
+      } else {
+        response = await listVideos(page, 12);
+      }
 
-      const assets: VideoAsset[] = videoFiles.map((file, index) =>
+      const assets: VideoAsset[] = response.videos.map((file: VideoMetadata, index: number) =>
         convertToVideoAsset(file, index)
       );
 
       setVideos(assets);
+      setTotalPages(response.total_pages);
+      setTotalVideos(response.total);
+
+      // Update global cache
+      setVideosCache((prev: Record<string, VideoAsset>) => {
+        const next = { ...prev };
+        assets.forEach(a => next[a.id] = a);
+        return next;
+      });
+
       return assets;
     } catch (err) {
       console.error("Failed to load files", err);
-      setVideos([]);
+      // setVideos([]);
       return [];
     } finally {
       setIsLoadingBucket(false);
     }
-  }, [convertToVideoAsset]);
+  }, [convertToVideoAsset, currentPage, searchQuery]);
 
   useEffect(() => {
-    loadFiles();
+    loadFiles(1, '');
+  }, []); // Only run once on mount
+
+  const handlePageChange = useCallback((page: number) => {
+    setCurrentPage(page);
+    loadFiles(page, searchQuery);
+  }, [loadFiles, searchQuery]);
+
+  const handleSearchChange = useCallback((query: string) => {
+    setSearchQuery(query);
+    setCurrentPage(1);
+    // 這裡可以考慮加上 debounce，目前每次輸入都會觸發 API
+    loadFiles(1, query);
   }, [loadFiles]);
 
   const handleUpload = useCallback(async (file: File) => {
@@ -207,12 +240,8 @@ const App: React.FC = () => {
   }, [currentVideo, previewClipTime]);
 
   const assetMap = useMemo(() => {
-    const map: Record<string, VideoAsset> = {};
-    videos.forEach(v => {
-      map[v.id] = v;
-    });
-    return map;
-  }, [videos]);
+    return videosCache;
+  }, [videosCache]);
 
   const handleSelectVideo = useCallback((video: VideoAsset) => {
     setCurrentVideo(video);
@@ -244,8 +273,8 @@ const App: React.FC = () => {
 
           <button
             className={`flex items-center gap-2 px-4 py-1.5 rounded text-sm transition ${currentVideo
-                ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                : 'bg-[#333] text-gray-500 cursor-not-allowed'
+              ? 'bg-blue-600 hover:bg-blue-500 text-white'
+              : 'bg-[#333] text-gray-500 cursor-not-allowed'
               }`}
             onClick={handleDownloadVideo}
             disabled={!currentVideo}
@@ -261,12 +290,18 @@ const App: React.FC = () => {
       <div className="flex-1 flex overflow-hidden min-h-0">
         <VideoLibrary
           videos={videos}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalVideos={totalVideos}
+          onPageChange={handlePageChange}
+          searchQuery={searchQuery}
+          onSearchChange={handleSearchChange}
           onSelectVideo={handleSelectVideo}
           onUpload={handleUpload}
           onDelete={handleDelete}
           isLoading={isLoadingBucket}
           isUploading={isUploading}
-          onVideosUpdate={handleVideosUpdate}
+          onVideosUpdate={() => loadFiles(currentPage, searchQuery)}
         />
 
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">

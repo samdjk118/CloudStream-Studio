@@ -42,10 +42,10 @@ export const fetchFiles = async (): Promise<GCSFile[]> => {
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     }
-    
+
     const data: FilesResponse = await res.json();
     console.log('📋 API Response:', data);
-    
+
     // 後端返回 { success, files, count }
     return data.files || [];
   } catch (error) {
@@ -60,12 +60,12 @@ export const fetchFiles = async (): Promise<GCSFile[]> => {
 export const uploadFile = async (file: File): Promise<void> => {
   const formData = new FormData();
   formData.append('file', file);
-  
+
   const res = await fetch(`${API_BASE}/api/upload`, {
     method: 'POST',
     body: formData,
   });
-  
+
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Upload failed: ${text}`);
@@ -80,7 +80,7 @@ export const deleteFile = async (filename: string): Promise<void> => {
   const res = await fetch(`${API_BASE}/api/files/${encodedPath}`, {
     method: 'DELETE',
   });
-  
+
   if (!res.ok) {
     throw new Error('Delete failed');
   }
@@ -102,21 +102,21 @@ export const getStreamUrl = (filename: string): string => {
  * 獲取影片縮圖 URL（正確的後端端點）
  */
 export const getThumbnailUrl = (
-    filename: string,
-    options: ThumbnailOptions = {}
-  ): string => {
-    const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
-    const params = new URLSearchParams();
-    
-    if (options.width) params.append('width', options.width.toString());
-    if (options.height) params.append('height', options.height.toString());
-    if (options.time_offset !== undefined) params.append('time_offset', options.time_offset.toString());
-    if (options.force_regenerate) params.append('force_regenerate', 'true');
-    
-    const queryString = params.toString();
-    const basePath = API_BASE || ''; 
-    const url = `${basePath}/api/thumbnails/video/${encodedPath}${queryString ? '?' + queryString : ''}`;
-    return url;
+  filename: string,
+  options: ThumbnailOptions = {}
+): string => {
+  const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
+  const params = new URLSearchParams();
+
+  if (options.width) params.append('width', options.width.toString());
+  if (options.height) params.append('height', options.height.toString());
+  if (options.time_offset !== undefined) params.append('time_offset', options.time_offset.toString());
+  if (options.force_regenerate) params.append('force_regenerate', 'true');
+
+  const queryString = params.toString();
+  const basePath = API_BASE || '';
+  const url = `${basePath}/api/thumbnails/video/${encodedPath}${queryString ? '?' + queryString : ''}`;
+  return url;
 };
 
 /**
@@ -135,20 +135,20 @@ export const fetchThumbnail = async (
 
     const url = getThumbnailUrl(filename, options);
     console.log('📸 請求縮圖:', url);
-    
+
     const response = await fetch(url);
-    
+
     if (!response.ok) {
       throw new Error(`Failed to fetch thumbnail: ${response.status} ${response.statusText}`);
     }
-    
+
     const blob = await response.blob();
     const blobUrl = URL.createObjectURL(blob);
-    
+
     // 記錄來源
     const cached = response.headers.get('X-Thumbnail-Cached');
     console.log(`✓ 縮圖載入 (${filename}): ${cached === 'true' ? '快取' : '新生成'}`);
-    
+
     return blobUrl;
   } catch (error) {
     console.error('❌ 取得縮圖失敗:', error);
@@ -167,16 +167,16 @@ export const deleteThumbnail = async (
 ): Promise<void> => {
   const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
   const params = new URLSearchParams();
-  
+
   if (width) params.append('width', width.toString());
   if (height) params.append('height', height.toString());
   if (time_offset !== undefined) params.append('time_offset', time_offset.toString());
-  
+
   const queryString = params.toString();
   const url = `${API_BASE}/api/thumbnails/video/${encodedPath}${queryString ? '?' + queryString : ''}`;
-  
+
   const response = await fetch(url, { method: 'DELETE' });
-  
+
   if (!response.ok) {
     throw new Error('Failed to delete thumbnail');
   }
@@ -224,12 +224,12 @@ export interface TaskStatus {
     duration_error_percent?: number;
     precision_level?: string;
     thumbnail_url?: string;
-    
+
     // 合併任務
     total_clips?: number;
     merged_duration?: number;
     clip_durations?: number[];
-    
+
     // 通用
     file_size?: number;
     video_info?: {
@@ -296,7 +296,7 @@ export const mergeVideos = async (request: MergeRequest): Promise<TaskResponse> 
  */
 export const getTaskStatus = async (taskId: string): Promise<TaskStatus> => {
   const response = await fetch(`${API_BASE}/api/tasks/${taskId}`);
-  
+
   if (!response.ok) {
     throw new Error(`Failed to get task status: ${response.statusText}`);
   }
@@ -314,25 +314,25 @@ export const pollTaskStatus = async (
   timeout: number = 300000  // 5 分鐘
 ): Promise<TaskStatus> => {
   const startTime = Date.now();
-  
+
   while (true) {
     const status = await getTaskStatus(taskId);
-    
+
     // 回調進度
     if (onProgress) {
       onProgress(status);
     }
-    
+
     // 完成或失敗
     if (status.status === 'completed' || status.status === 'failed') {
       return status;
     }
-    
+
     // 超時檢查
     if (Date.now() - startTime > timeout) {
       throw new Error('Task timeout');
     }
-    
+
     // 等待後繼續
     await new Promise(resolve => setTimeout(resolve, interval));
   }
@@ -359,20 +359,32 @@ export interface VideoMetadata {
   stream_url: string;
 }
 
+export interface ListVideosResponse {
+  videos: VideoMetadata[];
+  total: number;
+  page: number;
+  total_pages: number;
+}
+
 /**
  * 列出所有影片（帶搜尋）
  */
-export const listVideos = async (search?: string): Promise<VideoMetadata[]> => {
-  const url = search 
-    ? `${API_BASE}/api/videos/list?search=${encodeURIComponent(search)}`
-    : `${API_BASE}/api/videos/list`;
-  
+export const listVideos = async (page: number = 1, pageSize: number = 12, search?: string): Promise<ListVideosResponse> => {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    page_size: pageSize.toString()
+  });
+  if (search) {
+    params.append('search', search);
+  }
+
+  const url = `${API_BASE}/api/videos/list?${params.toString()}`;
   const response = await fetch(url);
-  
+
   if (!response.ok) {
     throw new Error(`Failed to list videos: ${response.statusText}`);
   }
-  
+
   return response.json();
 };
 
@@ -381,12 +393,15 @@ export const listVideos = async (search?: string): Promise<VideoMetadata[]> => {
  */
 export interface SearchVideosRequest {
   query: string;
-  limit?: number;
+  page?: number;
+  page_size?: number;
 }
 
 export interface SearchVideosResponse {
   videos: VideoMetadata[];
   total: number;
+  page: number;
+  total_pages: number;
   query: string;
 }
 
@@ -398,11 +413,11 @@ export const searchVideos = async (request: SearchVideosRequest): Promise<Search
     },
     body: JSON.stringify(request),
   });
-  
+
   if (!response.ok) {
     throw new Error(`Search failed: ${response.statusText}`);
   }
-  
+
   return response.json();
 };
 
@@ -422,12 +437,12 @@ export const renameVideo = async (request: RenameVideoRequest): Promise<VideoMet
     },
     body: JSON.stringify(request),
   });
-  
+
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Rename failed: ${errorText}`);
   }
-  
+
   return response.json();
 };
 
@@ -449,11 +464,11 @@ export const clipVideo = async (request: ClipWithNameRequest): Promise<TaskRespo
     },
     body: JSON.stringify(request),
   });
-  
+
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Clip failed: ${errorText}`);
   }
-  
+
   return response.json();
 };

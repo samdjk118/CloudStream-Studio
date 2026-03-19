@@ -1,14 +1,20 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { VideoAsset } from '../types';
-import { 
-  Upload, Trash2, Video, Loader2, Play, Film, RefreshCw, 
-  ChevronLeft, ChevronRight, Zap, Search, X, Edit2, Check 
+import {
+  Upload, Trash2, Video, Loader2, Play, Film, RefreshCw,
+  ChevronLeft, ChevronRight, Zap, Search, X, Edit2, Check
 } from 'lucide-react';
 import { getThumbnailWithCache, clearThumbnailForVideo } from './thumbnail';
 import { renameVideo } from '../services/api';
 
 interface VideoLibraryProps {
   videos: VideoAsset[];
+  currentPage: number;
+  totalPages: number;
+  totalVideos: number;
+  onPageChange: (page: number) => void;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
   onSelectVideo: (video: VideoAsset) => void;
   onUpload: (file: File) => void;
   onDelete: (video: VideoAsset) => void;
@@ -25,6 +31,12 @@ const POLL_INTERVAL = 3000;
 
 export const VideoLibrary: React.FC<VideoLibraryProps> = ({
   videos,
+  currentPage,
+  totalPages,
+  totalVideos,
+  onPageChange,
+  searchQuery,
+  onSearchChange,
   onSelectVideo,
   onUpload,
   onDelete,
@@ -37,38 +49,16 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [loadingThumbnails, setLoadingThumbnails] = useState<Set<string>>(new Set());
-  const [currentPage, setCurrentPage] = useState(1);
   const [optimizingVideos, setOptimizingVideos] = useState<Set<string>>(new Set());
-  
-  // 搜尋狀態
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filteredVideos, setFilteredVideos] = useState<VideoAsset[]>(videos);
-  
+
   // 重新命名狀態
   const [editingVideoId, setEditingVideoId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
-  
+
   const requestedThumbnails = useRef<Set<string>>(new Set());
   const videoCardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const pollingTasksRef = useRef<Map<string, { timeoutId: number; aborted: boolean }>>(new Map());
-
-  // 搜尋過濾
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredVideos(videos);
-      setCurrentPage(1);
-      return;
-    }
-    
-    const queryLower = searchQuery.toLowerCase();
-    const filtered = videos.filter(video => 
-      video.name.toLowerCase().includes(queryLower)
-    );
-    
-    setFilteredVideos(filtered);
-    setCurrentPage(1);
-  }, [searchQuery, videos]);
 
   // 組件卸載時清理所有輪詢
   useEffect(() => {
@@ -84,30 +74,16 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
     };
   }, []);
 
-  // 分頁計算
-  const totalPages = Math.ceil(filteredVideos.length / ITEMS_PER_PAGE);
-  const paginatedVideos = useMemo(() => {
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-    const endIndex = startIndex + ITEMS_PER_PAGE;
-    return filteredVideos.slice(startIndex, endIndex);
-  }, [filteredVideos, currentPage]);
-
-  useEffect(() => {
-    if (currentPage > totalPages && totalPages > 0) {
-      setCurrentPage(totalPages);
-    }
-  }, [filteredVideos.length, totalPages, currentPage]);
-
   // 重新命名處理
   const handleStartRename = useCallback((e: React.MouseEvent, video: VideoAsset) => {
     e.stopPropagation();
     setEditingVideoId(video.id);
-    
+
     let displayName = video.name;
     if (displayName.endsWith('.mp4')) {
       displayName = displayName.slice(0, -4);
     }
-    
+
     setEditingName(displayName);
   }, []);
 
@@ -121,33 +97,33 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
       alert('檔名不能為空');
       return;
     }
-    
+
     if (editingName === video.name.replace('.mp4', '')) {
       handleCancelRename();
       return;
     }
-    
+
     const gcsPath = (video as any).fullPath || video.name;
-    
+
     try {
       setIsRenaming(true);
-      
+
       await renameVideo({
         gcs_path: gcsPath,
         new_name: editingName.trim()
       });
-      
+
       console.log('✅ 重新命名成功');
-      
+
       if (onVideosUpdate) {
         onVideosUpdate();
       } else {
         console.warn('⚠️ onVideosUpdate 未提供，建議刷新頁面');
         alert('重新命名成功！請刷新頁面查看更新。');
       }
-      
+
       handleCancelRename();
-      
+
     } catch (error) {
       console.error('❌ 重新命名失敗:', error);
       alert(`重新命名失敗: ${error instanceof Error ? error.message : '未知錯誤'}`);
@@ -159,7 +135,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
   // 縮圖生成
   const generateThumbnail = useCallback(async (video: VideoAsset) => {
     if (
-      thumbnails[video.id] || 
+      thumbnails[video.id] ||
       loadingThumbnails.has(video.id) ||
       requestedThumbnails.current.has(video.id)
     ) {
@@ -171,12 +147,12 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
 
     try {
       console.log(`📸 請求縮圖: ${video.name}`);
-      
+
       const thumbnail = await getThumbnailWithCache(video.url, 1.0, {
         width: 320,
         height: 180
       });
-      
+
       if (thumbnail) {
         setThumbnails(prev => ({
           ...prev,
@@ -197,24 +173,24 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
 
   const handleRegenerateThumbnail = useCallback(async (e: React.MouseEvent, video: VideoAsset) => {
     e.stopPropagation();
-    
+
     console.log(`🔄 重新產生縮圖: ${video.name}`);
-    
+
     clearThumbnailForVideo(video.url);
-    
+
     setThumbnails(prev => {
       const newThumbnails = { ...prev };
       delete newThumbnails[video.id];
       return newThumbnails;
     });
-    
+
     requestedThumbnails.current.delete(video.id);
     await generateThumbnail(video);
   }, [generateThumbnail]);
 
   // Intersection Observer
   useEffect(() => {
-    if (paginatedVideos.length === 0) return;
+    if (videos.length === 0) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -222,7 +198,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
           if (entry.isIntersecting) {
             const videoId = entry.target.getAttribute('data-video-id');
             if (videoId) {
-              const video = paginatedVideos.find(v => v.id === videoId);
+              const video = videos.find(v => v.id === videoId);
               if (video) {
                 generateThumbnail(video);
               }
@@ -246,17 +222,17 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
     return () => {
       observer.disconnect();
     };
-  }, [paginatedVideos, generateThumbnail]);
+  }, [videos, generateThumbnail]);
 
   // 清理舊資料
   useEffect(() => {
     const currentVideoIds = new Set(videos.map(v => v.id));
-    
+
     videoCardRefs.current.forEach((_, id) => {
       if (!currentVideoIds.has(id)) {
         videoCardRefs.current.delete(id);
         requestedThumbnails.current.delete(id);
-        
+
         const video = videos.find(v => v.id === id);
         if (video) {
           clearThumbnailForVideo(video.url);
@@ -268,50 +244,50 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
   // 輪詢最佳化任務
   const pollOptimizeTask = useCallback((taskId: string, videoId: string) => {
     const startTime = Date.now();
-    
+
     pollingTasksRef.current.set(taskId, { timeoutId: 0, aborted: false });
-    
+
     const cleanup = () => {
       const task = pollingTasksRef.current.get(taskId);
       if (task?.timeoutId) {
         clearTimeout(task.timeoutId);
       }
       pollingTasksRef.current.delete(taskId);
-      
+
       setOptimizingVideos(prev => {
         const newSet = new Set(prev);
         newSet.delete(videoId);
         return newSet;
       });
     };
-    
+
     const checkStatus = async () => {
       const task = pollingTasksRef.current.get(taskId);
-      
+
       if (!task || task.aborted) {
         console.log(`⏹️ 任務已中止: ${taskId}`);
         cleanup();
         return;
       }
-      
+
       if (Date.now() - startTime > OPTIMIZE_TIMEOUT) {
         console.error(`⏰ 任務超時: ${taskId}`);
         alert('最佳化任務超時，請稍後重試。');
         cleanup();
         return;
       }
-      
+
       try {
         const response = await fetch(`${API_BASE}/api/tasks/${taskId}`);
-        
+
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        
+
         const taskData = await response.json();
-        
+
         console.log(`📊 最佳化進度: ${(taskData.progress * 100).toFixed(0)}%`);
-        
+
         if (taskData.status === 'completed') {
           console.log('✅ 最佳化完成');
           alert('✅ 最佳化完成！影片現在載入更快了。');
@@ -322,7 +298,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
           cleanup();
         } else {
           const timeoutId = window.setTimeout(checkStatus, POLL_INTERVAL);
-          
+
           const currentTask = pollingTasksRef.current.get(taskId);
           if (currentTask) {
             currentTask.timeoutId = timeoutId;
@@ -330,9 +306,9 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
         }
       } catch (error) {
         console.error('查詢狀態失敗:', error);
-        
+
         const retryCount = (pollingTasksRef.current.get(taskId) as any)?.retryCount || 0;
-        
+
         if (retryCount < 3) {
           console.log(`🔄 重試 (${retryCount + 1}/3)...`);
           const currentTask = pollingTasksRef.current.get(taskId);
@@ -347,56 +323,56 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
         }
       }
     };
-    
+
     checkStatus();
   }, []);
 
   // 最佳化處理
   const handleOptimize = useCallback(async (e: React.MouseEvent, video: VideoAsset) => {
     e.stopPropagation();
-    
+
     const videoPath = (video as any).fullPath || video.name;
-    
+
     if (optimizingVideos.has(video.id)) {
       alert('此影片正在最佳化中，請稍候...');
       return;
     }
-    
+
     if (!window.confirm(`最佳化 "${video.name}"？\n\n這將加速影片載入，但需要一些時間處理。`)) {
       return;
     }
-    
+
     console.log('🔧 開始最佳化:', videoPath);
-    
+
     setOptimizingVideos(prev => new Set(prev).add(video.id));
-    
+
     try {
       const response = await fetch(
         `${API_BASE}/api/videos/optimize/${encodeURIComponent(videoPath)}`,
-        { 
+        {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
           }
         }
       );
-      
+
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`最佳化請求失敗: ${response.status} - ${errorText}`);
       }
-      
+
       const result = await response.json();
       console.log('✅ 任務已創建:', result.task_id);
-      
+
       alert('最佳化任務已啟動！\n完成後影片載入速度會更快。');
-      
+
       pollOptimizeTask(result.task_id, video.id);
-      
+
     } catch (error) {
       console.error('❌ 最佳化失敗:', error);
       alert(`最佳化失敗: ${error instanceof Error ? error.message : '未知錯誤'}`);
-      
+
       setOptimizingVideos(prev => {
         const newSet = new Set(prev);
         newSet.delete(video.id);
@@ -425,31 +401,31 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
 
   const handleDelete = useCallback((e: React.MouseEvent, video: VideoAsset) => {
     e.stopPropagation();
-    
+
     const pathToDelete = (video as any).fullPath || video.name;
-    if (pathToDelete.includes('/hls/') || 
-        pathToDelete.endsWith('.m3u8') || 
-        pathToDelete.endsWith('.ts')) {
+    if (pathToDelete.includes('/hls/') ||
+      pathToDelete.endsWith('.m3u8') ||
+      pathToDelete.endsWith('.ts')) {
       alert('⚠️ 無法刪除 HLS 檔案。請刪除原始影片。');
       return;
     }
-    
+
     if (optimizingVideos.has(video.id)) {
       alert('⚠️ 此影片正在最佳化中，無法刪除。');
       return;
     }
-    
+
     if (window.confirm(`確定要刪除 "${video.name}" 嗎？`)) {
       clearThumbnailForVideo(video.url);
       onDelete(video);
-      
+
       if (selectedVideoId === video.id) {
         setSelectedVideoId(null);
       }
-      
+
       videoCardRefs.current.delete(video.id);
       requestedThumbnails.current.delete(video.id);
-      
+
       setThumbnails(prev => {
         const newThumbnails = { ...prev };
         delete newThumbnails[video.id];
@@ -477,9 +453,9 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
   }, []);
 
   const goToPage = useCallback((page: number) => {
-    setCurrentPage(Math.max(1, Math.min(page, totalPages)));
+    onPageChange(Math.max(1, Math.min(page, totalPages)));
     document.querySelector('.video-list-container')?.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [totalPages]);
+  }, [totalPages, onPageChange]);
 
   // 渲染
   return (
@@ -519,31 +495,31 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
             type="text"
             placeholder="搜尋影片..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => onSearchChange(e.target.value)}
             className="w-full pl-10 pr-10 py-2 bg-[#222] border border-[#333] rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition"
           />
           {searchQuery && (
             <button
-              onClick={() => setSearchQuery('')}
+              onClick={() => onSearchChange('')}
               className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 hover:bg-[#333] rounded transition"
             >
               <X className="w-4 h-4 text-gray-500" />
             </button>
           )}
         </div>
-        
+
         {searchQuery && (
           <div className="mt-2 text-xs text-gray-500">
-            找到 {filteredVideos.length} 個結果
+            找到 {totalVideos} 個結果
           </div>
         )}
       </div>
 
       {/* 分頁資訊 */}
-      {filteredVideos.length > 0 && !isLoading && (
+      {totalVideos > 0 && !isLoading && (
         <div className="px-4 py-2 border-b border-[#333] flex items-center justify-between text-xs text-gray-400 shrink-0">
           <span>
-            顯示 {(currentPage - 1) * ITEMS_PER_PAGE + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredVideos.length)} / 共 {filteredVideos.length} 個
+            顯示 {(currentPage - 1) * ITEMS_PER_PAGE + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, totalVideos)} / 共 {totalVideos} 個
           </span>
           <span>第 {currentPage} / {totalPages} 頁</span>
         </div>
@@ -556,7 +532,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
             <Loader2 className="w-8 h-8 animate-spin mb-2" />
             <p className="text-sm">載入影片中...</p>
           </div>
-        ) : filteredVideos.length === 0 ? (
+        ) : videos.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-500">
             <div className="w-16 h-16 border-2 border-dashed border-gray-700 rounded-lg flex items-center justify-center mb-3">
               <Video className="w-8 h-8" />
@@ -566,7 +542,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
             </p>
             {searchQuery && (
               <button
-                onClick={() => setSearchQuery('')}
+                onClick={() => onSearchChange('')}
                 className="mt-2 text-xs text-blue-400 hover:underline"
               >
                 清除搜尋
@@ -574,7 +550,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
             )}
           </div>
         ) : (
-          paginatedVideos.map((video, index) => {
+          videos.map((video, index) => {
             const key = getVideoKey(video, index);
             const isSelected = selectedVideoId === video.id;
             const thumbnail = thumbnails[video.id];
@@ -593,9 +569,8 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                 }}
                 data-video-id={video.id}
                 onClick={() => !isEditing && handleVideoClick(video)}
-                className={`group relative bg-[#222] rounded-lg overflow-hidden cursor-pointer transition-all hover:bg-[#2a2a2a] ${
-                  isSelected ? 'ring-2 ring-blue-500 bg-[#2a2a2a]' : ''
-                } ${isOptimizing ? 'opacity-75' : ''} ${isEditing ? 'ring-2 ring-yellow-500' : ''}`}
+                className={`group relative bg-[#222] rounded-lg overflow-hidden cursor-pointer transition-all hover:bg-[#2a2a2a] ${isSelected ? 'ring-2 ring-blue-500 bg-[#2a2a2a]' : ''
+                  } ${isOptimizing ? 'opacity-75' : ''} ${isEditing ? 'ring-2 ring-yellow-500' : ''}`}
               >
                 {/* Thumbnail */}
                 <div className="relative w-full h-40 bg-black flex items-center justify-center overflow-hidden">
@@ -699,7 +674,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                       {video.name}
                     </h3>
                   )}
-                  
+
                   <div className="flex items-center justify-between text-xs text-gray-500">
                     <span>{video.size ? formatFileSize(video.size) : '未知大小'}</span>
                     {video.contentType && (
@@ -721,7 +696,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                       <Edit2 className="w-4 h-4 text-white" />
                     </button>
                   )}
-                  
+
                   {videoStatus !== 'ready' && !isOptimizing && !isEditing && (
                     <button
                       onClick={(e) => handleOptimize(e, video)}
@@ -731,7 +706,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                       <Zap className="w-4 h-4 text-white" />
                     </button>
                   )}
-                  
+
                   {thumbnail && !isOptimizing && !isEditing && (
                     <button
                       onClick={(e) => handleRegenerateThumbnail(e, video)}
@@ -741,7 +716,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                       <RefreshCw className="w-4 h-4 text-white" />
                     </button>
                   )}
-                  
+
                   {!isOptimizing && !isEditing && (
                     <button
                       onClick={(e) => handleDelete(e, video)}
@@ -773,7 +748,7 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
           <div className="flex items-center gap-1">
             {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
               let pageNum: number;
-              
+
               if (totalPages <= 5) {
                 pageNum = i + 1;
               } else if (currentPage <= 3) {
@@ -788,11 +763,10 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                 <button
                   key={pageNum}
                   onClick={() => goToPage(pageNum)}
-                  className={`w-8 h-8 rounded text-sm transition ${
-                    currentPage === pageNum
-                      ? 'bg-blue-600 text-white'
-                      : 'hover:bg-[#333] text-gray-400'
-                  }`}
+                  className={`w-8 h-8 rounded text-sm transition ${currentPage === pageNum
+                    ? 'bg-blue-600 text-white'
+                    : 'hover:bg-[#333] text-gray-400'
+                    }`}
                 >
                   {pageNum}
                 </button>
@@ -812,12 +786,12 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
       )}
 
       {/* Footer */}
-      {videos.length > 0 && (
+      {totalVideos > 0 && (
         <div className="h-10 px-4 border-t border-[#333] flex items-center justify-between text-xs text-gray-500 shrink-0">
-          <span>{videos.length} 個影片</span>
+          <span>{totalVideos} 個影片</span>
           <span>
             {videos.reduce((sum, v) => sum + (v.size || 0), 0) > 0
-              ? formatFileSize(videos.reduce((sum, v) => sum + (v.size || 0), 0))
+              ? `本頁: ${formatFileSize(videos.reduce((sum, v) => sum + (v.size || 0), 0))}`
               : ''}
           </span>
         </div>
