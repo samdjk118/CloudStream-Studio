@@ -94,3 +94,36 @@ sh run.sh
 ```
 test_api.sh
 ```
+
+## Google Cloud Storage CORS 配置
+
+為了讓前端（例如 `localhost:5173` 或 Cloud Run URL）能夠直接從 Google Cloud Storage 播放影片，您需要為您的 GCS Bucket 配置 CORS (Cross-Origin Resource Sharing)。
+
+### 1. 建立 CORS 配置文件
+建立一個 `cors.json` 檔案：
+```json
+[
+    {
+      "origin": [
+        "https://<your-cloud-run-url>",
+        "http://localhost:5173",
+        "http://localhost:3000"
+      ],
+      "method": ["GET", "HEAD", "OPTIONS"],
+      "responseHeader": ["*"],
+      "maxAgeSeconds": 3600
+    }
+]
+```
+
+### 2. 使用 gsutil 套用配置
+在終端機執行以下指令套用到您的 Bucket：
+```bash
+gsutil cors set cors.json gs://<YOUR_BUCKET_NAME>
+```
+
+### 3. 驗證配置
+您可以使用以下指令查看目前的 CORS 設定：
+```bash
+gsutil cors get gs://<YOUR_BUCKET_NAME>
+```
