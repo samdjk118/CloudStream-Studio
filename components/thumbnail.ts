@@ -15,27 +15,39 @@ export const getThumbnailWithCache = async (
 ): Promise<string> => {
   // 從 videoUrl 提取檔案路徑
   const urlObj = new URL(videoUrl, window.location.origin);
-  const pathParts = urlObj.pathname.split('/api/stream/');
-  
-  if (pathParts.length < 2) {
+  let filePath = '';
+
+  if (urlObj.pathname.includes('/api/stream/')) {
+    const pathParts = urlObj.pathname.split('/api/stream/');
+    if (pathParts.length >= 2) {
+      filePath = decodeURIComponent(pathParts[1]);
+    }
+  } else if (urlObj.hostname === 'storage.googleapis.com') {
+    // GCS Signed URL format: /bucket-name/path/to/file
+    const pathParts = urlObj.pathname.split('/');
+    if (pathParts.length > 2) {
+      // 移除開頭的 / 和 bucket name
+      filePath = decodeURIComponent(pathParts.slice(2).join('/'));
+    }
+  }
+
+  if (!filePath) {
     console.error('❌ 無效的影片 URL:', videoUrl);
     return '';
   }
-  
-  const filePath = decodeURIComponent(pathParts[1]);
-  
+
   // 建立快取鍵
   const cacheKey = `${filePath}_${seekTime}_${options.width || 320}x${options.height || 180}`;
-  
+
   // 檢查快取
   if (thumbnailCache.has(cacheKey)) {
     console.log(`✓ 使用快取縮圖: ${filePath}`);
     return thumbnailCache.get(cacheKey)!;
   }
-  
+
   try {
     console.log(`📸 請求縮圖: ${filePath}`);
-    
+
     // 從後端 API 取得縮圖
     const blobUrl = await fetchThumbnail(filePath, {
       ...options,
@@ -43,11 +55,11 @@ export const getThumbnailWithCache = async (
       width: options.width || 320,
       height: options.height || 180
     });
-    
+
     // 儲存到快取
     thumbnailCache.set(cacheKey, blobUrl);
     blobUrlCache.add(blobUrl);
-    
+
     return blobUrl;
   } catch (error) {
     console.error('❌ 取得縮圖失敗:', error);
@@ -62,10 +74,10 @@ export const clearThumbnailCache = () => {
   blobUrlCache.forEach(url => {
     URL.revokeObjectURL(url);
   });
-  
+
   thumbnailCache.clear();
   blobUrlCache.clear();
-  
+
   console.log('🗑️  已清除縮圖快取');
 };
 
@@ -74,14 +86,24 @@ export const clearThumbnailCache = () => {
  */
 export const clearThumbnailForVideo = (videoUrl: string) => {
   const urlObj = new URL(videoUrl, window.location.origin);
-  const pathParts = urlObj.pathname.split('/api/stream/');
-  
-  if (pathParts.length < 2) return;
-  
-  const filePath = decodeURIComponent(pathParts[1]);
-  
+  let filePath = '';
+
+  if (urlObj.pathname.includes('/api/stream/')) {
+    const pathParts = urlObj.pathname.split('/api/stream/');
+    if (pathParts.length >= 2) {
+      filePath = decodeURIComponent(pathParts[1]);
+    }
+  } else if (urlObj.hostname === 'storage.googleapis.com') {
+    const pathParts = urlObj.pathname.split('/');
+    if (pathParts.length > 2) {
+      filePath = decodeURIComponent(pathParts.slice(2).join('/'));
+    }
+  }
+
+  if (!filePath) return;
+
   const keysToDelete: string[] = [];
-  
+
   thumbnailCache.forEach((value, key) => {
     if (key.startsWith(filePath)) {
       keysToDelete.push(key);
@@ -89,9 +111,9 @@ export const clearThumbnailForVideo = (videoUrl: string) => {
       blobUrlCache.delete(value);
     }
   });
-  
+
   keysToDelete.forEach(key => thumbnailCache.delete(key));
-  
+
   console.log(`🗑️  已清除 ${keysToDelete.length} 個縮圖快取 (${filePath})`);
 };
 
@@ -104,14 +126,14 @@ export const preloadThumbnails = async (
   options: Omit<ThumbnailOptions, 'time_offset'> = {}
 ): Promise<void> => {
   console.log(`🔄 預載入 ${videoUrls.length} 個縮圖...`);
-  
-  const promises = videoUrls.map(url => 
+
+  const promises = videoUrls.map(url =>
     getThumbnailWithCache(url, seekTime, options).catch(err => {
       console.error(`❌ 預載入失敗 (${url}):`, err);
       return '';
     })
   );
-  
+
   await Promise.all(promises);
   console.log('✅ 縮圖預載入完成');
 };
