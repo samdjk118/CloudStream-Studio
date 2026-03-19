@@ -211,9 +211,15 @@ class GCSService:
             gcs_path: GCS 檔案路徑
             expiration: 過期時間（秒）
         """
+        import datetime
         try:
             blob = self.bucket.blob(gcs_path)
-            url = blob.generate_signed_url(expiration=expiration)
+            # 將 expiration (秒) 轉換為 timedelta
+            url = blob.generate_signed_url(
+                version="v4",
+                expiration=datetime.timedelta(seconds=expiration),
+                method="GET"
+            )
             return url
         except Exception as e:
             logger.error(f"❌ Failed to generate signed URL: {e}")
